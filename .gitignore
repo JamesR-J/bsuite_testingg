@@ -1,0 +1,21 @@
+# Virtual environment files.
+bin/
+lib/
+lib64/
+share/
+pyvenv.cfg
+
+# IDE files.
+.vscode
+/.pdm-python
+/=0.4.28
+/test.sh
+/setup.py
+/run_on_gcp.sh
+/README.md
+/pdm.lock
+/LICENSE
+/jaxlib-0.1.76+cuda11.cudnn82-cp39-none-manylinux2010_x86_64.whl
+/CONTRIBUTING.md
+/tests/
+/reports/

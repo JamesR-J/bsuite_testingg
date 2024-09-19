@@ -85,10 +85,6 @@ class ActorCritic(base.Agent):
             noise_scale: float,
             num_ensemble: int
     ):
-        # NUM_ENSEMBLE = 10
-        RP_NOISE = 0.1
-        LR = 1e-4
-
         def _get_reward_noise(obs, actions):
             ensemble_obs = jnp.repeat(obs[jnp.newaxis, :], num_ensemble, axis=0)
             ensemble_action = jnp.repeat(actions[jnp.newaxis, :], num_ensemble, axis=0)
@@ -113,8 +109,7 @@ class ActorCritic(base.Agent):
 
             obs = jnp.repeat(obs[jnp.newaxis, :], action_spec.num_values, axis=0)
 
-            reward_over_actions = jax.vmap(_get_reward_noise, in_axes=(0, 0))(obs,
-                                                                                         actions)
+            reward_over_actions = jax.vmap(_get_reward_noise, in_axes=(0, 0))(obs, actions)
             # reward_over_actions = jnp.sum(reward_over_actions, axis=0)  # TODO removed the layer sum
             reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
 
@@ -127,7 +122,6 @@ class ActorCritic(base.Agent):
             action_probs = distrax.Softmax(logits=logits).probs
             values = action_probs * q_fn
             values = jnp.sum(values, axis=-1)
-
             values_tm1 = values[:-1]
             values_t = values[1:]
 
@@ -178,7 +172,7 @@ class ActorCritic(base.Agent):
             bl_loss = 0.5 * jnp.mean(jnp.square(vtrace_returns.errors) * mask)
 
             # total_loss = pg_loss + 0.5 * bl_loss + 0.01 * ent_loss
-            total_loss = pg_loss + 0.5 * bl_loss + 0.01 * ent_loss
+            total_loss = pg_loss + 0.5 * bl_loss + ent_loss
             return total_loss
 
         # Transform the loss into a pure function.
@@ -323,11 +317,11 @@ def default_agent(obs_spec: specs.Array,
         network=network,
         ensemble_network=ensemble_network,
         optimizer=optax.adam(3e-3),
-        ensemble_optimizer=optax.adam(3e-3),
+        ensemble_optimizer=optax.adam(1e-4),
         rng=hk.PRNGSequence(seed),
         sequence_length=32,
         discount=0.99,
         td_lambda=0.9,
-        noise_scale=0.0,
+        noise_scale=0.1,
         num_ensemble=10
     )
