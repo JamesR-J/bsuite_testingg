@@ -1,0 +1,28 @@
+[project]
+name = "bsuite-main"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "jamesrj_desktop", email = "james.rudd.jones@gmail.com"},
+]
+dependencies = [
+    "setuptools>=74.0.0",
+    "immutabledict>=4.2.0",
+    "dm-env>=1.6",
+    "scikit-image>=0.21.0",
+    "six>=1.16.0",
+    "pandas>=2.0.3",
+    "termcolor>=2.4.0",
+    "dm-haiku==0.0.10",
+    "jax==0.4.13",
+    "optax==0.0.8",
+    "rlax>=0.1.5",
+    "tqdm>=4.66.5",
+]
+requires-python = "==3.8.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
