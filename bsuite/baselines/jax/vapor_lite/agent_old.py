@@ -148,7 +148,7 @@ class ActorCritic(base.Agent):
             values_tm1 = values[:-1]
             values_t = values[1:]
 
-            _, actions, behaviour_logits, _, _, _ = jax.tree_util.tree_map(lambda t: t[:-1], trajectory)
+            _, actions, behaviour_logits, _, _, _, _, _ = jax.tree_util.tree_map(lambda t: t[:-1], trajectory)
             # TODO check the whole trajectory saving thing as is BAD
             learner_logits = logits[:-1]
 
@@ -292,9 +292,12 @@ class ActorCritic(base.Agent):
         # Internalize state.
         self._state = TrainingState(initial_params, initial_opt_state, ensembled_reward_state)
         self._forward = jax.jit(forward)
-        self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length)
+        self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length, 10)
         self._sgd_step = sgd_step
         self._rng = rng
+
+    def return_buffer(self):
+        None
 
     def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
         """Selects actions according to a softmax policy."""
@@ -310,15 +313,16 @@ class ActorCritic(base.Agent):
             action: base.Action,
             logits,
             new_timestep: dm_env.TimeStep,
+            buffer_state,
             key
     ):
         """Adds a transition to the trajectory buffer and periodically does SGD."""
-        self._buffer.append(timestep, action, logits, new_timestep)
+        self._buffer.append(timestep, action, logits, new_timestep, jnp.zeros((1,)), jnp.zeros((1,)))
         if self._buffer.full() or new_timestep.last():
             trajectory = self._buffer.drain()
             self._state, key = self._sgd_step(self._state, trajectory, key)
 
-        return key
+        return buffer_state, key
 
 
 def default_agent(obs_spec: specs.Array,
