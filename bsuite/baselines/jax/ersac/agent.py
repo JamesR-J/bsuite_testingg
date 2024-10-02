@@ -56,7 +56,6 @@ def entropy_loss_fn(logits_t, uncertainty_t, mask):
 
 class EnsembleTrainingState(NamedTuple):
   params: hk.Params
-  # target_params: hk.Params
   opt_state: Any
   step: int
 
@@ -82,7 +81,7 @@ class ActorCritic(base.Agent):
             sequence_length: int,
             discount: float,
             td_lambda_val: float,
-            noise_scale: float,
+            reward_noise_scale: float,
             init_tau: float,
             num_ensemble: int
     ):
@@ -115,7 +114,7 @@ class ActorCritic(base.Agent):
 
             td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
             k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
-                jnp.expand_dims(trajectory.rewards, axis=-1), # + (jnp.square(state_action_reward_noise) / 2 * tau),
+                jnp.expand_dims(trajectory.rewards, axis=-1) + (jnp.square(state_action_reward_noise) / 2 * tau),
                 jnp.expand_dims(trajectory.discounts * discount, axis=-1),
                 jnp.expand_dims(values[1:], axis=-1),
                 jnp.array(td_lambda_val),
@@ -151,7 +150,9 @@ class ActorCritic(base.Agent):
         def tau_loss(tau, trajectory: sequence.Trajectory, entropy) -> jnp.ndarray:
             state_action_reward_noise = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
 
-            return jnp.mean((jnp.square(state_action_reward_noise) / (2 * tau)) + tau * entropy)
+            tau_loss = jnp.mean((jnp.square(state_action_reward_noise) / (2 * tau)) + tau * entropy)
+
+            return tau_loss
 
         # Transform the loss into a pure function.
         loss_fn = hk.without_apply_rng(hk.transform(loss)).apply
@@ -165,7 +166,7 @@ class ActorCritic(base.Agent):
             """Q-learning loss with added reward noise + half-in bootstrap."""
             o_tm1, a_tm1, r_t, m_t, z_t = transitions
             r_t_pred = ensemble_network.apply(params, o_tm1, jnp.expand_dims(a_tm1, axis=-1))
-            # r_t += noise_scale * z_t  # TODO don't need this when on policy
+            # r_t += reward_noise_scale * z_t  # TODO don't need this when on policy
             return 0.5 * jnp.mean(m_t * jnp.square(r_t - jnp.squeeze(r_t_pred, axis=-1)))  # TODO is this right?
 
         # Define update function.
@@ -177,9 +178,9 @@ class ActorCritic(base.Agent):
             updates, new_opt_state = optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
-            # tau_gradients = jax.grad(tau_loss)(state.tau, trajectory, entropy)
-            # tau = state.tau - tau_gradients  # TODO is this okay?
-            tau = state.tau  # TODO fixed tau for now to figure out the algo innit
+            tau_gradients = jax.grad(tau_loss)(state.tau, trajectory, entropy)
+            tau = state.tau - 3e-3 * tau_gradients  # TODO is this okay?
+            # tau = state.tau  # TODO fixed tau for now to figure out the algo innit
 
             def callback(state):
                 print(state)
@@ -316,7 +317,7 @@ def default_agent(obs_spec: specs.Array,
         sequence_length=50,
         discount=0.99,
         td_lambda_val=0.9,
-        noise_scale=0.0,
+        reward_noise_scale=1.0,
         num_ensemble=10,
-        init_tau=0.0001
+        init_tau=0.9  # 0.0001
     )
