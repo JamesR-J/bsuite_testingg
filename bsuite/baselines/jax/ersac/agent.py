@@ -89,25 +89,20 @@ class ActorCritic(base.Agent):
             num_ensemble: int
     ):
         def _get_reward_noise(obs, actions):
-            ensemble_obs = jnp.repeat(obs[jnp.newaxis, :], num_ensemble, axis=0)
-            ensemble_action = jnp.repeat(actions[jnp.newaxis, :], num_ensemble, axis=0)
-            # # TODO check ye old ensemble obs and action and why not using them
-
             def single_reward_noise(state, obs, action):
                 reward_pred =  ensemble_network.apply(state.params, obs, jnp.expand_dims(action, axis=-1))
                 return reward_pred
 
-            # ensembled_reward = jnp.zeros((num_ensemble, actions.shape[0], 1))
-            # for k, state in enumerate(self._ensemble):
-            #     ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
-            ensembles = jax.tree_util.tree_map(lambda x: x, self._ensemble)
-            ensembled_reward = jax.vmap(single_reward_noise)()
+            ensembled_reward = jnp.zeros((num_ensemble, actions.shape[0], 1))
+            for k, state in enumerate(self._ensemble):
+                ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
 
-            SIGMA_SCALE = 3.0
-            ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward, axis=0)
+            # SIGMA_SCALE = 3.0
+            # ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward, axis=0)
             # ensembled_reward = SIGMA_SCALE * jnp.square(jnp.std(ensembled_reward, axis=0))
-            ensembled_reward = jnp.minimum(ensembled_reward, 1)
-            # ensembled_reward = jnp.square(jnp.std(ensembled_reward, axis=0))
+            # ensembled_reward = jnp.minimum(ensembled_reward, 1)
+            ensembled_reward = jnp.square(jnp.std(ensembled_reward, axis=0))
+            # ensembled_reward = jnp.minimum(ensembled_reward, 1)
 
             return ensembled_reward
 
@@ -175,8 +170,7 @@ class ActorCritic(base.Agent):
         # Define update function.
         @jax.jit
         def sgd_step(state: TrainingState,
-                     trajectory: sequence.Trajectory,
-                     bsuite_info) -> TrainingState:
+                     trajectory: sequence.Trajectory) -> TrainingState:
             """Does a step of SGD over a trajectory."""
             (pv_loss, entropy), gradients = jax.value_and_grad(loss_fn, has_aux=True)(state.params, trajectory,
                                                                                       state.tau_params)
@@ -193,34 +187,22 @@ class ActorCritic(base.Agent):
                 transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
                                trajectory.mask[:, k], trajectory.noise[:, k]]
                 # TODO is this right observations [:-1]
-                self._ensemble[k] = self._ensemble_sgd_step(ensemble_state, transitions)
-                # self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
-                # ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
+                self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
+                ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
-            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, info):
+            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all):
                 metric_dict = {"policy_and_value_loss": pv_loss,
                                "tau": tau,
                                "tau_loss": tau_loss_val,
-                               # "ensemble_loss": ensemble_loss_all,
-                               "denoised_return": info["denoised_return"],
-                               "episode_return": info["episode_return"],
-                               "episode": info["episode"]
                                }
 
                 wandb.log(metric_dict)
 
-                for ensemble_id in range(self._num_ensemble):
-                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[k]})
+                for ensemble_id, _ in enumerate(self._ensemble):
+                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
 
-            jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val, ensemble_loss_all, bsuite_info)
-
-            # TODO add wandb stuff here
-            # critic+actor loss
-            # ensemble loss
-            # tau
-            # tau loss
-            # episode return
-            # denoised return
+            jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val, ensemble_loss_all)
+            # TODO added wandb stuff in wrappers as well
 
             return TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
                                  tau_opt_state=new_tau_opt_state)
@@ -237,8 +219,7 @@ class ActorCritic(base.Agent):
 
             return EnsembleTrainingState(params=new_params,
                                          opt_state=new_opt_state,
-                                         step=state.step + 1)
-                    # ensemble_loss_val)
+                                         step=state.step + 1), ensemble_loss_val
 
         # Define loss function, including bootstrap mask `m_t` & reward noise `z_t`.
         def ensemble_loss(params: hk.Params,
@@ -259,9 +240,6 @@ class ActorCritic(base.Agent):
         initial_ensemble_params = [
             ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
         ]
-        # initial_ensemble_target_params = [
-        #     ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
-        # ]
         initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
 
         log_tau = jnp.asarray(0., dtype=jnp.float32)
@@ -302,8 +280,7 @@ class ActorCritic(base.Agent):
                action: base.Action,
                logits,
                new_timestep: dm_env.TimeStep,
-               buffer_state,
-               bsuite_info
+               buffer_state
                ):
         """Adds a transition to the trajectory buffer and periodically does SGD."""
         mask = np.random.binomial(1, self._mask_prob, self._num_ensemble)
@@ -313,7 +290,7 @@ class ActorCritic(base.Agent):
 
         if self._buffer.full() or new_timestep.last():
             trajectory = self._buffer.drain()
-            self._state = self._sgd_step(self._state, trajectory, bsuite_info)
+            self._state = self._sgd_step(self._state, trajectory)
 
         return buffer_state
 
@@ -361,7 +338,7 @@ def default_agent(obs_spec: specs.Array,
         rng=hk.PRNGSequence(seed),
         sequence_length=50,
         discount=0.99,
-        td_lambda_val=0.9,
+        td_lambda_val=0.8,
         reward_noise_scale=1.0,
         num_ensemble=10,
         init_tau=0.001  # 0.0001
