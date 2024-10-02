@@ -108,7 +108,7 @@ class ActorCritic(base.Agent):
 
             ensembled_reward = jnp.zeros((num_ensemble, self._obs_spec.shape[0] + 1, 1))
             for k, state in enumerate(self._ensemble):
-                ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
+                ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
 
             SIGMA_SCALE = 3.0
             ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward, axis=0)

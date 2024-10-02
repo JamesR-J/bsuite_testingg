@@ -13,29 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
-"""A simple agent interface."""
+"""Basic test coverage for agent training."""
 
-import abc
-import dm_env
+from absl.testing import absltest
+from absl.testing import parameterized
 
-Action = int  # Only discrete-action agents for now.
+from bsuite import bsuite
+from bsuite import sweep
+from bsuite.baselines import experiment
+from bsuite.baselines.jax import actor_critic
 
 
-class Agent(abc.ABC):
-  """An agent consists of an action-selection mechanism and an update rule."""
+class RunTest(parameterized.TestCase):
 
-  @abc.abstractmethod
-  def select_action(self, timestep: dm_env.TimeStep) -> Action:
-    """Takes in a timestep, samples from agent's policy, returns an action."""
+  @parameterized.parameters(*sweep.TESTING)
+  def test_run(self, bsuite_id: str):
+    env = bsuite.load_from_id(bsuite_id)
 
-  @abc.abstractmethod
-  def update(
-      self,
-      timestep: dm_env.TimeStep,
-      action: Action,
-          logits,
-      new_timestep: dm_env.TimeStep,
-          buffer_state,
-          key
-  ) -> None:
-    """Updates the agent given a transition."""
+    agent = actor_critic.default_agent(
+        env.observation_spec(), env.action_spec())
+
+    experiment.run(
+        agent=agent,
+        environment=env,
+        num_episodes=5)
+
+
+if __name__ == '__main__':
+  absltest.main()

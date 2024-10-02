@@ -13,29 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
-"""A simple agent interface."""
+"""A simple actor-critic implementation in JAX."""
 
-import abc
-import dm_env
-
-Action = int  # Only discrete-action agents for now.
-
-
-class Agent(abc.ABC):
-  """An agent consists of an action-selection mechanism and an update rule."""
-
-  @abc.abstractmethod
-  def select_action(self, timestep: dm_env.TimeStep) -> Action:
-    """Takes in a timestep, samples from agent's policy, returns an action."""
-
-  @abc.abstractmethod
-  def update(
-      self,
-      timestep: dm_env.TimeStep,
-      action: Action,
-          logits,
-      new_timestep: dm_env.TimeStep,
-          buffer_state,
-          key
-  ) -> None:
-    """Updates the agent given a transition."""
+from bsuite.baselines.jax.ersac.agent import ActorCritic
+from bsuite.baselines.jax.ersac.agent import default_agent
+from bsuite.baselines.jax.ersac import utils
