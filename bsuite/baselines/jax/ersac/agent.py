@@ -89,11 +89,13 @@ class ActorCritic(base.Agent):
         def _get_reward_noise(obs, actions):
             ensemble_obs = jnp.repeat(obs[jnp.newaxis, :], num_ensemble, axis=0)
             ensemble_action = jnp.repeat(actions[jnp.newaxis, :], num_ensemble, axis=0)
+            # TODO check ye old ensemble obs and action and why not using them
 
             def single_reward_noise(state, obs, action):
                 return ensemble_network.apply(state.params, obs, jnp.expand_dims(action, axis=-1))
 
-            ensembled_reward = jnp.zeros((num_ensemble, self._obs_spec.shape[0] + 1, 1))
+            ensembled_reward = jnp.zeros((num_ensemble, self._obs_spec.shape[0], 1))  # TODO change to sequence length if not emptying buffer at end of episode
+            # ensembled_reward = jnp.zeros((num_ensemble, sequence_length, 1))
             for k, state in enumerate(self._ensemble):
                 ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
 
@@ -104,34 +106,49 @@ class ActorCritic(base.Agent):
             return ensembled_reward
 
         # Define loss function.
-        def loss(trajectory: sequence.Trajectory, tau, key) -> jnp.ndarray:
+        def loss(trajectory: sequence.Trajectory, tau) -> jnp.ndarray:
             """"Actor-critic loss."""
             logits, values = network(trajectory.observations)
-            policy_dist = distrax.Softmax(logits=logits)
-            log_prob = policy_dist.log_prob(trajectory.actions)
+            # policy_dist = distrax.Softmax(logits=logits[:-1])
+            # log_prob = policy_dist.log_prob(trajectory.actions)
+            #
+            # state_action_reward_noise = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
+            #
+            # td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
+            # k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
+            #     jnp.expand_dims(trajectory.rewards, axis=-1),  # + (state_action_reward_noise ** 2 / 2 * tau),
+            #     jnp.expand_dims(trajectory.discounts * discount, axis=-1),
+            #     jnp.expand_dims(values[1:], axis=-1),
+            #     jnp.array(td_lambda_val),
+            # )
+            #
+            # value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)))
+            # # TODO is it right to use [1:] for these values etc or [:-1]?
+            #
+            # entropy = -log_prob
+            # # entropy = policy_dist.entropy()
+            #
+            # policy_loss = jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1] - tau * entropy))
 
-            state_action_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
-
-            td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
-            k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
-                jnp.expand_dims(trajectory.rewards[1:], axis=-1) + (state_action_reward_noise ** 2 / 2 * tau)[1:],
-                jnp.expand_dims(trajectory.discounts[1:] * discount, axis=-1),
-                jnp.expand_dims(values[1:], axis=-1),
-                jnp.array(td_lambda_val),
+            td_errors = rlax.td_lambda(
+                v_tm1=values[:-1],
+                r_t=trajectory.rewards,
+                discount_t=trajectory.discounts * discount,
+                v_t=values[1:],
+                lambda_=jnp.array(td_lambda_val),
             )
-
-            value_loss = jnp.mean(jnp.square(values[1:] - jax.lax.stop_gradient(k_estimate - tau * log_prob[1:])))
-            # TODO is it right to use [1:] for these values etc ?
-
-            entropy = -log_prob[1:]
-            entropy = policy_dist.entropy()[1:]
-
-            policy_loss = jnp.mean(log_prob[1:] * jax.lax.stop_gradient(k_estimate - values[1:] - tau * entropy))
+            value_loss = jnp.mean(td_errors ** 2)
+            policy_loss = rlax.policy_gradient_loss(
+                logits_t=logits[:-1],
+                a_t=trajectory.actions,
+                adv_t=td_errors,
+                w_t=jnp.ones_like(td_errors))
+            entropy = jnp.zeros(())
 
             return policy_loss + value_loss, entropy
 
         def tau_loss(tau, trajectory: sequence.Trajectory, entropy, key) -> jnp.ndarray:
-            state_action_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
+            state_action_reward_noise = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
 
             return jnp.mean((state_action_reward_noise ** 2 / (2 * tau)) + tau * entropy)
 
@@ -153,10 +170,9 @@ class ActorCritic(base.Agent):
         # Define update function.
         @jax.jit
         def sgd_step(state: TrainingState,
-                     trajectory: sequence.Trajectory,
-                     key) -> TrainingState:
+                     trajectory: sequence.Trajectory) -> TrainingState:
             """Does a step of SGD over a trajectory."""
-            gradients, entropy = jax.grad(loss_fn, has_aux=True)(state.params, trajectory, state.tau, key)
+            gradients, entropy = jax.grad(loss_fn, has_aux=True)(state.params, trajectory, state.tau)
             updates, new_opt_state = optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
@@ -164,15 +180,17 @@ class ActorCritic(base.Agent):
             # tau = state.tau - tau_gradients  # TODO is this okay?
             tau = state.tau  # TODO fixed tau for now to figure out the algo innit
 
-            def callback(tau):
-                print(tau)
+            # def callback(tau):
+            #     print(tau)
             # jax.experimental.io_callback(callback, None, tau)
 
-            for k, ensemble_state in enumerate(self._ensemble):
-                transitions = [trajectory.observations, trajectory.actions, trajectory.rewards, trajectory.mask[:, k], trajectory.noise[:, k]]
-                self._ensemble[k] = ensemble_sgd_step(ensemble_state, transitions)
+            # for k, ensemble_state in enumerate(self._ensemble):
+            #     transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
+            #                    trajectory.mask[:, k], trajectory.noise[:, k]]
+            #     # TODO is this right observations [:-1]
+            #     self._ensemble[k] = ensemble_sgd_step(ensemble_state, transitions)
 
-            return TrainingState(params=new_params, opt_state=new_opt_state, tau=tau), key
+            return TrainingState(params=new_params, opt_state=new_opt_state, tau=tau)
 
         # Define update function for each member of ensemble.
         @jax.jit
@@ -236,19 +254,20 @@ class ActorCritic(base.Agent):
             action: base.Action,
             logits,
             new_timestep: dm_env.TimeStep,
-               buffer_state,
-            key
+               buffer_state
     ):
         """Adds a transition to the trajectory buffer and periodically does SGD."""
         mask = np.random.binomial(1, self._mask_prob, self._num_ensemble)
         noise = np.random.randn(self._num_ensemble)
 
         self._buffer.append(timestep, action, logits, new_timestep, mask, noise)
-        if self._buffer.full() or new_timestep.last():
-            trajectory = self._buffer.drain()
-            self._state, key = self._sgd_step(self._state, trajectory, key)
 
-        return buffer_state, key
+        # if self._buffer.full() or new_timestep.last():
+        if self._buffer.full():
+            trajectory = self._buffer.drain()
+            self._state = self._sgd_step(self._state, trajectory)
+
+        return buffer_state
 
 
 def default_agent(obs_spec: specs.Array,
@@ -289,9 +308,9 @@ def default_agent(obs_spec: specs.Array,
         optimizer=optax.adam(3e-3),
         ensemble_optimizer=optax.adam(3e-3),
         rng=hk.PRNGSequence(seed),
-        sequence_length=32,
+        sequence_length=50,
         discount=0.99,
-        td_lambda_val=0.8,
+        td_lambda_val=0.9,
         noise_scale=0.0,
         num_ensemble=10,
         init_tau=0.001

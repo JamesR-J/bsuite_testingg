@@ -18,7 +18,7 @@
 from typing import Any, Callable, NamedTuple, Tuple
 
 from bsuite.baselines import base
-from bsuite.baselines.utils import sequence
+from bsuite.baselines.utils import sequence_old
 
 import dm_env
 from dm_env import specs
@@ -54,7 +54,7 @@ class ActorCritic(base.Agent):
   ):
 
     # Define loss function.
-    def loss(trajectory: sequence.Trajectory) -> jnp.ndarray:
+    def loss(trajectory: sequence_old.Trajectory) -> jnp.ndarray:
       """"Actor-critic loss."""
       logits, values = network(trajectory.observations)
       td_errors = rlax.td_lambda(
@@ -79,7 +79,7 @@ class ActorCritic(base.Agent):
     # Define update function.
     @jax.jit
     def sgd_step(state: TrainingState,
-                 trajectory: sequence.Trajectory) -> TrainingState:
+                 trajectory: sequence_old.Trajectory) -> TrainingState:
       """Does a step of SGD over a trajectory."""
       gradients = jax.grad(loss_fn)(state.params, trajectory)
       updates, new_opt_state = optimizer.update(gradients, state.opt_state)
@@ -95,9 +95,12 @@ class ActorCritic(base.Agent):
     # Internalize state.
     self._state = TrainingState(initial_params, initial_opt_state)
     self._forward = jax.jit(forward)
-    self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length)
+    self._buffer = sequence_old.Buffer(obs_spec, action_spec, sequence_length)
     self._sgd_step = sgd_step
     self._rng = rng
+
+  def return_buffer(self):
+        return None
 
   def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
     """Selects actions according to a softmax policy."""
@@ -105,17 +108,16 @@ class ActorCritic(base.Agent):
     observation = timestep.observation[None, ...]
     logits, _ = self._forward(self._state.params, observation)
     action = jax.random.categorical(key, logits).squeeze()
-    return int(action), logits
+    return int(action)
 
   def update(
       self,
       timestep: dm_env.TimeStep,
       action: base.Action,
-          logits,
       new_timestep: dm_env.TimeStep,
   ):
     """Adds a transition to the trajectory buffer and periodically does SGD."""
-    self._buffer.append(timestep, action, logits, new_timestep)
+    self._buffer.append(timestep, action, new_timestep)
     if self._buffer.full() or new_timestep.last():
       trajectory = self._buffer.drain()
       self._state = self._sgd_step(self._state, trajectory)

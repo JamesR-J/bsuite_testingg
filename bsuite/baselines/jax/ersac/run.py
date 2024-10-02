@@ -83,5 +83,5 @@ def main(_):
 
 
 if __name__ == '__main__':
-    with jax.disable_jit(disable=True):
+    with jax.disable_jit(disable=False):
         app.run(main)

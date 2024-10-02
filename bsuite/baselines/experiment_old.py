@@ -17,26 +17,15 @@
 
 from bsuite.baselines import base
 from bsuite.logging import terminal_logging
-import jax
-import numpy as np
+
 import dm_env
-
-
-def preprocess_step(ts: dm_env.TimeStep) -> dm_env.TimeStep:
-    # reward: None -> 0, discount: None -> 1,
-    # scalar -> np.array(), and StepType -> int.
-    if ts.reward is None:
-        ts = ts._replace(reward=0.)
-    if ts.discount is None:
-        ts = ts._replace(discount=1.)
-    return jax.tree_util.tree_map(np.asarray, ts)
 
 
 def run(agent: base.Agent,
         environment: dm_env.Environment,
         num_episodes: int,
         verbose: bool = False) -> None:
-    """Runs an agent on an environment.
+  """Runs an agent on an environment.
 
   Note that for bsuite environments, logging is handled internally.
 
@@ -47,22 +36,22 @@ def run(agent: base.Agent,
     verbose: Whether to also log to terminal.
   """
 
-    if verbose:
-        environment = terminal_logging.wrap_environment(
-            environment, log_every=True)  # pytype: disable=wrong-arg-types
+  if verbose:
+    environment = terminal_logging.wrap_environment(
+        environment, log_every=True)  # pytype: disable=wrong-arg-types
 
-    buffer_state = agent.return_buffer()
-    for _ in range(num_episodes):
-        # Run an episode.
-        timestep = environment.reset()
-        while not timestep.last():
-            # Generate an action from the agent's policy.
-            action, logits = agent.select_action(timestep)
+  for _ in range(num_episodes):
+    # Run an episode.
+    timestep = environment.reset()
+    while not timestep.last():
+      # Generate an action from the agent's policy.
+      action = agent.select_action(timestep)
 
-            # Step the environment.
-            new_timestep = environment.step(action)
+      # Step the environment.
+      new_timestep = environment.step(action)
 
-            buffer_state = agent.update(timestep, action, logits, new_timestep, buffer_state)
+      # Tell the agent about what just happened.
+      agent.update(timestep, action, new_timestep)
 
-            # Book-keeping.
-            timestep = new_timestep
+      # Book-keeping.
+      timestep = new_timestep

@@ -29,13 +29,11 @@ class Agent(abc.ABC):
     """Takes in a timestep, samples from agent's policy, returns an action."""
 
   @abc.abstractmethod
-  def update(
-      self,
-      timestep: dm_env.TimeStep,
-      action: Action,
-          logits,
-      new_timestep: dm_env.TimeStep,
-          buffer_state,
-          key
+  def update(self,
+            timestep: dm_env.TimeStep,
+            action: Action,
+            logits,
+            new_timestep: dm_env.TimeStep,
+            buffer_state,
   ) -> None:
     """Updates the agent given a transition."""

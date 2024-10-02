@@ -31,12 +31,8 @@ class Trajectory(NamedTuple):
   # TODO(b/152889430): Make this generic once it is supported by Pytype.
   observations: np.ndarray  # [T + 1, ...]
   actions: np.ndarray  # [T]
-  logits: np.ndarray  # [T]
   rewards: np.ndarray  # [T]
   discounts: np.ndarray  # [T]
-  step: np.ndarray  # [T]
-  mask: np.ndarray  # [T]
-  noise: np.ndarray  # [T]
 
 
 class Buffer:
@@ -44,12 +40,8 @@ class Buffer:
 
   _observations: np.ndarray
   _actions: np.ndarray
-  _logits: np.ndarray
   _rewards: np.ndarray
   _discounts: np.ndarray
-  _step: np.ndarray
-  _mask: np.ndarray
-  _noise: np.ndarray
 
   _max_sequence_length: int
   _needs_reset: bool = True
@@ -60,7 +52,6 @@ class Buffer:
       obs_spec: specs.Array,
       action_spec: specs.Array,
       max_sequence_length: int,
-      num_ensemble: int
   ):
     """Pre-allocates buffers of numpy arrays to hold the sequences."""
     self._observations = np.zeros(
@@ -68,14 +59,8 @@ class Buffer:
     self._actions = np.zeros(
         shape=(max_sequence_length, *action_spec.shape),
         dtype=action_spec.dtype)
-    self._logits = np.zeros(
-        shape=(max_sequence_length, action_spec.num_values),
-        dtype=obs_spec.dtype)
     self._rewards = np.zeros(max_sequence_length, dtype=np.float32)
     self._discounts = np.zeros(max_sequence_length, dtype=np.float32)
-    self._step = np.zeros(max_sequence_length, dtype=np.float32)
-    self._mask = np.zeros((max_sequence_length, num_ensemble), dtype=np.float32)
-    self._noise = np.zeros((max_sequence_length, num_ensemble), dtype=np.float32)
 
     self._max_sequence_length = max_sequence_length
 
@@ -83,10 +68,7 @@ class Buffer:
       self,
       timestep: dm_env.TimeStep,
       action: base.Action,
-      logits,
       new_timestep: dm_env.TimeStep,
-      mask,
-      noise
   ):
     """Appends an observation, action, reward, and discount to the buffer."""
     if self.full():
@@ -101,12 +83,8 @@ class Buffer:
     # Append (o, a, r, d) to the sequence buffer.
     self._observations[self._t + 1] = new_timestep.observation
     self._actions[self._t] = action
-    self._logits[self._t] = logits
     self._rewards[self._t] = new_timestep.reward
     self._discounts[self._t] = new_timestep.discount
-    self._step[self._t] = new_timestep.step_type
-    self._mask[self._t] = mask
-    self._noise[self._t] = noise
     self._t += 1
 
     # Don't accumulate sequences that cross episode boundaries.
@@ -121,12 +99,8 @@ class Buffer:
     trajectory = Trajectory(
         self._observations[:self._t + 1],
         self._actions[:self._t],
-        self._logits[:self._t],
         self._rewards[:self._t],
         self._discounts[:self._t],
-        self._step[:self._t],
-        self._mask[:self._t],
-        self._noise[:self._t],
     )
     self._t = 0  # Mark sequences as consumed.
     self._needs_reset = True
