@@ -94,5 +94,5 @@ def main(_):
 
 if __name__ == '__main__':
     # with jax.checking_leaks():
-    with jax.disable_jit(disable=False):
+    with jax.disable_jit(disable=True):
         app.run(main)

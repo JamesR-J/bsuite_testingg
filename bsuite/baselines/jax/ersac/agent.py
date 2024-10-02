@@ -89,8 +89,8 @@ class ActorCritic(base.Agent):
             num_ensemble: int
     ):
         def _get_reward_noise(obs, actions):
-            ensemble_obs = jnp.repeat(obs[jnp.newaxis, :], num_ensemble, axis=0)
-            ensemble_action = jnp.repeat(actions[jnp.newaxis, :], num_ensemble, axis=0)
+            ensemble_obs = jnp.repeat(jnp.expand_dims(obs, axis=0), num_ensemble, axis=0)
+            ensemble_action = jnp.repeat(jnp.expand_dims(actions, axis=0), num_ensemble, axis=0)
             # # TODO check ye old ensemble obs and action and why not using them
 
             def single_reward_noise(state, obs, action):
@@ -100,8 +100,9 @@ class ActorCritic(base.Agent):
             # ensembled_reward = jnp.zeros((num_ensemble, actions.shape[0], 1))
             # for k, state in enumerate(self._ensemble):
             #     ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
-            ensembles = jax.tree_util.tree_map(lambda x: x, self._ensemble)
-            ensembled_reward = jax.vmap(single_reward_noise)()
+            # ensembles = jax.tree_util.tree_map(lambda x: x, self._ensemble)
+            ensembles = self._ensemble
+            ensembled_reward = jax.vmap(single_reward_noise)(self._ensemble, ensemble_obs, ensemble_action)
 
             SIGMA_SCALE = 3.0
             ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward, axis=0)
@@ -188,14 +189,29 @@ class ActorCritic(base.Agent):
             new_tau_params = optax.apply_updates(state.tau_params, tau_updates)
             tau = jnp.exp(new_tau_params)
 
-            ensemble_loss_all = jnp.zeros((self._num_ensemble,))
-            for k, ensemble_state in enumerate(self._ensemble):
-                transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
-                               trajectory.mask[:, k], trajectory.noise[:, k]]
-                # TODO is this right observations [:-1]
-                self._ensemble[k] = self._ensemble_sgd_step(ensemble_state, transitions)
-                # self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
-                # ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
+            ensemble_obs = jnp.repeat(jnp.expand_dims(trajectory.observations[:-1], axis=0),  num_ensemble, axis=0)
+            ensemble_actions = jnp.repeat(jnp.expand_dims(trajectory.actions, axis=0), num_ensemble, axis=0)
+            ensemble_rewards = jnp.repeat(jnp.expand_dims(trajectory.rewards, axis=0), num_ensemble, axis=0)
+            ensemble_mask = jnp.swapaxes(trajectory.mask, 0, 1)
+            ensemble_noise = jnp.swapaxes(trajectory.noise, 0, 1)
+
+            transitions = (ensemble_obs,
+                                                                                  ensemble_actions,
+                                                                                  ensemble_rewards,
+                                                                                  ensemble_mask,
+                                                                                  ensemble_noise)
+
+            ensemble_loss_all, self._ensemble = jax.vmap(self._ensemble_sgd_step)(self._ensemble,
+                                                                                  transitions)
+
+            # ensemble_loss_all = jnp.zeros((self._num_ensemble,))
+            # for k, ensemble_state in enumerate(self._ensemble):
+            #     transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
+            #                    trajectory.mask[:, k], trajectory.noise[:, k]]
+            #     # TODO is this right observations [:-1]
+            #     self._ensemble[k] = self._ensemble_sgd_step(ensemble_state, transitions)
+            #     # self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
+            #     # ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
             def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, info):
                 metric_dict = {"policy_and_value_loss": pv_loss,
@@ -210,7 +226,7 @@ class ActorCritic(base.Agent):
                 wandb.log(metric_dict)
 
                 for ensemble_id in range(self._num_ensemble):
-                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[k]})
+                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
 
             jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val, ensemble_loss_all, bsuite_info)
 
@@ -228,17 +244,16 @@ class ActorCritic(base.Agent):
         # Define update function for each member of ensemble.
         @jax.jit
         def ensemble_sgd_step(state: EnsembleTrainingState,
-                              transitions: Sequence[jnp.ndarray]) -> Tuple[EnsembleTrainingState, Any]:
+                              transitions: Sequence[jnp.ndarray]) -> Tuple[Any, EnsembleTrainingState]:
             """Does a step of SGD for the whole ensemble over `transitions`."""
 
             ensemble_loss_val, gradients = jax.value_and_grad(ensemble_loss)(state.params, transitions)
             updates, new_opt_state = ensemble_optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
-            return EnsembleTrainingState(params=new_params,
+            return ensemble_loss_val, EnsembleTrainingState(params=new_params,
                                          opt_state=new_opt_state,
                                          step=state.step + 1)
-                    # ensemble_loss_val)
 
         # Define loss function, including bootstrap mask `m_t` & reward noise `z_t`.
         def ensemble_loss(params: hk.Params,
@@ -256,25 +271,38 @@ class ActorCritic(base.Agent):
         initial_params = init(next(rng), dummy_observation)
         initial_opt_state = optimizer.init(initial_params)
 
-        initial_ensemble_params = [
-            ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
-        ]
+        # initial_ensemble_params = [
+        #     ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
+        # ]
         # initial_ensemble_target_params = [
         #     ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
         # ]
-        initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
+        # initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
+
+        ensemble_dummy_obs = jnp.repeat(dummy_observation, num_ensemble, axis=0)
+        ensemble_dummy_actions = jnp.repeat(dummy_action, num_ensemble, axis=0)
+
+        def ensemble_init(obs, actions):
+            init_params = ensemble_network.init(next(rng), jnp.expand_dims(obs, axis=0), jnp.expand_dims(actions, axis=0))
+            init_opt_state = ensemble_optimizer.init(init_params)
+
+            init_state = EnsembleTrainingState(init_params, init_opt_state, step=0)
+
+            return init_state
 
         log_tau = jnp.asarray(0., dtype=jnp.float32)
         tau_opt_state = tau_optimizer.init(log_tau)
 
         # Internalize state.
         self._state = TrainingState(initial_params, initial_opt_state, log_tau, tau_opt_state)
-        self._ensemble = [
-            EnsembleTrainingState(p, o, step=0) for p, o in zip(
-                initial_ensemble_params,
-                # initial_ensemble_target_params,
-                initial_ensemble_opt_state)
-        ]
+        # self._ensemble = [
+        #     EnsembleTrainingState(p, o, step=0) for p, o in zip(
+        #         initial_ensemble_params,
+        #         # initial_ensemble_target_params,
+        #         initial_ensemble_opt_state)
+        # ]
+        # keys = jax.random.split(jax.random.PRNGKey(0), num_ensemble)
+        self._ensemble = jax.vmap(ensemble_init)(ensemble_dummy_obs, ensemble_dummy_actions)
         self._forward = jax.jit(forward)
         self._ensemble_forward = jax.jit(ensemble_network.apply)
         self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length, num_ensemble)
