@@ -25,6 +25,8 @@ from bsuite.baselines import experiment
 from bsuite.baselines.jax import ersac
 from bsuite.baselines.utils import pool
 
+import wandb
+
 # Internal imports.
 
 # Experiment flags.
@@ -44,6 +46,14 @@ FLAGS = flags.FLAGS
 
 def run(bsuite_id: str) -> str:
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
+
+  wandb.init(project="BSuite_Testing",
+             # entity=config.WANDB_ENTITY,
+             # config=config,
+             group="ersac_testing",
+             mode="disabled",
+             # mode="online",
+             )
 
   env = bsuite.load_and_record(
       bsuite_id=bsuite_id,
@@ -83,5 +93,6 @@ def main(_):
 
 
 if __name__ == '__main__':
+    # with jax.checking_leaks():
     with jax.disable_jit(disable=False):
         app.run(main)

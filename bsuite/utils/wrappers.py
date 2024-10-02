@@ -61,6 +61,7 @@ class Logging(dm_env.Environment):
     # Most-recent-episode.
     self._episode_len = 0
     self._episode_return = 0.0
+    self._last_episode_return = 0.0
 
   def flush(self):
     if hasattr(self._logger, 'flush'):
@@ -103,6 +104,7 @@ class Logging(dm_env.Environment):
 
     # Perform bookkeeping at the end of episodes.
     if timestep.last():
+      self._last_episode_return += self._episode_return
       self._episode_len = 0
       self._episode_return = 0.0
 
@@ -124,6 +126,21 @@ class Logging(dm_env.Environment):
     data.update(self._env.bsuite_info())
     self._logger.write(data)
 
+  def return_bsuite_data(self):  # TODO added this function
+    data = dict(
+      # Accumulated data.
+      steps=self._steps,
+      episode=self._episode,
+      total_return=self._total_return,
+      # Most-recent-episode data.
+      episode_len=self._episode_len,
+      episode_return=self._last_episode_return,
+    )
+    data.update(self._env.bsuite_info())
+
+    self._last_episode_return = 0.0
+
+    return data
   @property
   def raw_env(self):
     # Recursively unwrap until we reach the true 'raw' env.

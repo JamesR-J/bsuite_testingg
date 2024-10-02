@@ -19,3 +19,4 @@ pyvenv.cfg
 /CONTRIBUTING.md
 /tests/
 /reports/
+/wandb_api_key.txt

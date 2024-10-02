@@ -62,7 +62,7 @@ def run(agent: base.Agent,
             # Step the environment.
             new_timestep = environment.step(action)
 
-            buffer_state = agent.update(timestep, action, logits, new_timestep, buffer_state)
+            buffer_state = agent.update(timestep, action, logits, new_timestep, buffer_state, environment.return_bsuite_data())
 
             # Book-keeping.
             timestep = new_timestep
