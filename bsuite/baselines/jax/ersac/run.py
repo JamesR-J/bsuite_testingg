@@ -31,14 +31,14 @@ import wandb
 
 # Experiment flags.
 flags.DEFINE_string(
-    'bsuite_id', 'deep_sea/5', 'BSuite identifier. '
+    'bsuite_id', 'deep_sea/1', 'BSuite identifier. '
                                # 'bsuite_id', 'deep_sea/10', 'BSuite identifier. '
     'This global flag can be used to control which environment is loaded.')
 flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
 flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
                   'which form of logging to use for bsuite results')
 flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 45000, 'Overrides number of training eps.')
+flags.DEFINE_integer('num_episodes', 15000, 'Overrides number of training eps.')
 flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
 
 FLAGS = flags.FLAGS
