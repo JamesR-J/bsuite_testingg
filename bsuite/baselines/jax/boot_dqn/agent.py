@@ -143,6 +143,9 @@ class BootstrappedDqn(base.Agent):
     self._active_head = self._ensemble[0]
     self._total_steps = 0
 
+  def return_buffer(self):
+      return None
+
   def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
     """Select values via Thompson sampling, then use epsilon-greedy policy."""
     self._total_steps += 1
@@ -153,13 +156,15 @@ class BootstrappedDqn(base.Agent):
     batched_obs = timestep.observation[None, ...]
     q_values = self._forward(self._active_head.params, batched_obs)
     action = np.random.choice(np.flatnonzero(q_values == q_values.max()))
-    return int(action)
+    return int(action), q_values
 
   def update(
       self,
       timestep: dm_env.TimeStep,
       action: base.Action,
+      logits,
       new_timestep: dm_env.TimeStep,
+    buffer_state
   ):
     """Update the agent: add transition to replay and periodically do SGD."""
 
@@ -199,6 +204,8 @@ class BootstrappedDqn(base.Agent):
     for k, state in enumerate(self._ensemble):
       if state.step % self._target_update_period == 0:
         self._ensemble[k] = state._replace(target_params=state.params)
+
+    return buffer_state
 
 
 def default_agent(

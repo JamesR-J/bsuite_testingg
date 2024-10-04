@@ -100,21 +100,20 @@ class ActorCritic(base.Agent):
             importance_sampling_exponent: int
     ):
         def _get_reward_noise(obs, actions):
-            ensemble_obs = jnp.repeat(obs[jnp.newaxis, :], num_ensemble, axis=0)
-            ensemble_action = jnp.repeat(actions[jnp.newaxis, :], num_ensemble, axis=0)
-
             def single_reward_noise(state, obs, action):
-                return ensemble_network.apply(state.params, obs, action)
+                reward_pred = ensemble_network.apply(state.params, obs, jnp.expand_dims(action, axis=-1))
+                return reward_pred
 
-            ensembled_reward = jnp.zeros((num_ensemble, self._obs_spec.shape[0] + 1, 1))
+            ensembled_reward_sep = jnp.zeros((num_ensemble, actions.shape[0], 1))
             for k, state in enumerate(self._ensemble):
-                ensembled_reward = ensembled_reward.at[k].set(single_reward_noise(state, obs, actions))
+                ensembled_reward_sep = ensembled_reward_sep.at[k].set(single_reward_noise(state, obs, actions))
 
-            SIGMA_SCALE = 3.0
-            ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward, axis=0)
-            ensembled_reward = jnp.minimum(ensembled_reward, 1)
+            # SIGMA_SCALE = 3.0  # this are from other experiments
+            # ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
+            ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
+            # ensembled_reward = jnp.minimum(ensembled_reward_sep, 1)
 
-            return ensembled_reward
+            return ensembled_reward, ensembled_reward_sep
 
         def _reward_noise_over_actions(obs: chex.Array) -> chex.Array:
             # run the get_reward_noise for each action choice, can probs vmap
