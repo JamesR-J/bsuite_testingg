@@ -32,14 +32,14 @@ from ml_collections import config_dict
 
 # Experiment flags.
 flags.DEFINE_string(
-    'bsuite_id', 'deep_sea/1', 'BSuite identifier. '
+    'bsuite_id', 'deep_sea/5', 'BSuite identifier. '
                                # 'bsuite_id', 'deep_sea/10', 'BSuite identifier. '
     'This global flag can be used to control which environment is loaded.')
 flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
 flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
                   'which form of logging to use for bsuite results')
 flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 20000, 'Overrides number of training eps.')
+flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
 # TODO reset this to 25000
 flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
 
@@ -50,7 +50,7 @@ def run(og_bsuite_id: str) -> str:
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
   config = config_dict.ConfigDict()
-  config.PRIOR_SCALE = 5  # 0.5
+  config.PRIOR_SCALE = 10.0  # 5.0  # 0.5
   config.LR = 1e-3
   config.ENS_LR = 1e-3
   config.TAU_LR = 1e-3
@@ -58,7 +58,7 @@ def run(og_bsuite_id: str) -> str:
   config.TD_LAMBDA = 0.8
   config.REWARD_NOISE_SCALE = 1.0
   config.MASK_PROB = 0.8
-  config.DEEP_SEA_MAP = 1
+  config.DEEP_SEA_MAP = 20
 
   bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
 
