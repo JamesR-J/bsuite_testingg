@@ -85,15 +85,14 @@ class ActorCritic(base.Agent):
             self,
             obs_spec: specs.Array,
             action_spec: specs.DiscreteArray,
-            actor_network: PolicyValueNet,
-            critic_network: PolicyValueNet,
+            network: PolicyValueNet,
             ensemble_network: Any,
             optimizer: optax.GradientTransformation,
             ensemble_optimizer: optax.GradientTransformation,
             rng: hk.PRNGSequence,
             sequence_length: int,
             discount: float,
-            td_lambda: float,
+            td_lambda_val: float,
             noise_scale: float,
             mask_prob: float,
             num_ensemble: int,
@@ -108,10 +107,10 @@ class ActorCritic(base.Agent):
             for k, state in enumerate(self._ensemble):
                 ensembled_reward_sep = ensembled_reward_sep.at[k].set(single_reward_noise(state, obs, actions))
 
-            # SIGMA_SCALE = 3.0  # this are from other experiments
-            # ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
-            ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
-            # ensembled_reward = jnp.minimum(ensembled_reward_sep, 1)
+            SIGMA_SCALE = 3.0  # this are from other experiments
+            ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
+            # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
+            ensembled_reward = jnp.minimum(ensembled_reward, 1)
 
             return ensembled_reward, ensembled_reward_sep
 
@@ -124,85 +123,32 @@ class ActorCritic(base.Agent):
             obs = jnp.repeat(obs[jnp.newaxis, :], action_spec.num_values, axis=0)
 
             reward_over_actions = jax.vmap(_get_reward_noise, in_axes=(0, 0))(obs, actions)
-            # reward_over_actions = jnp.sum(reward_over_actions, axis=0)  # TODO removed the layer sum
             reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
 
             return reward_over_actions
 
         # Define loss function.
-        def critic_loss(trajectory, logits, key) -> jnp.ndarray:
+        def loss(trajectory) -> jnp.ndarray:
             """"Actor-critic loss."""
-            q_fn = critic_network(trajectory.experience["obs"][0])
-            action_probs = distrax.Softmax(logits=logits).probs
-            values = action_probs * q_fn
-            values = jnp.sum(values, axis=-1)
+            logits, values = network(trajectory.observations)
+            policy_dist = distrax.Softmax(logits=logits[:-1])
+            log_prob = policy_dist.log_prob(trajectory.actions)
 
-            values_tm1 = values[:-1]
-            values_t = values[1:]
+            state_action_reward_noise, ensembled_reward_sep = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
+            state_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
 
-            # _, actions, behaviour_logits, _, _, _, _, _ = jax.tree_util.tree_map(lambda t: t[0, :-1], trajectory.experience)
-            actions = trajectory.experience["actions"][0, :-1]
-            behaviour_logits = trajectory.experience["logits"][0, :-1]
+            td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
+            k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
+                                   jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
+                                   jnp.expand_dims(trajectory.discounts * discount, axis=-1),
+                                   jnp.expand_dims(values[1:], axis=-1),
+                                   jnp.array(td_lambda_val),
+                                   )
 
-            learner_logits = logits[:-1]
+            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)))
+            # TODO is it right to use [1:] for these values etc or [:-1]?
 
-            discount_t = trajectory.experience["discounts"][0, 1:] * discount
-
-            state_action_reward_noise = _get_reward_noise(trajectory.experience["obs"][0],
-                                                          trajectory.experience["actions"][0])
-
-            rewards = trajectory.experience["rewards"][0, 1:] + state_action_reward_noise[1:]
-
-            vtrace_td_error_and_advantage = jax.vmap(rlax.vtrace_td_error_and_advantage, in_axes=(1, 1, 1, 1, 1, None),
-                                                     out_axes=1)
-            rhos = rlax.categorical_importance_sampling_ratios(learner_logits,
-                                                               behaviour_logits,
-                                                               jnp.squeeze(actions, axis=-1))
-            # TODO edit the vtrace policy returns stuff  https://lilianweng.github.io/posts/2018-04-08-policy-gradient/ inspo for the entropy bonus thing
-            vtrace_returns = vtrace_td_error_and_advantage(jnp.expand_dims(values_tm1, axis=-1),
-                                                           jnp.expand_dims(values_t, axis=-1),
-                                                           rewards,
-                                                           discount_t,
-                                                           jnp.expand_dims(rhos, axis=-1),
-                                                           0.9)
-
-            mask = jnp.not_equal(trajectory.experience["step"][0, 1:], int(dm_env.StepType.FIRST))
-            mask = mask.astype(jnp.float32)
-
-            pg_advantage = jax.lax.stop_gradient(vtrace_returns.pg_advantage)
-
-            # Baseline loss.
-            loss = 0.5 * jnp.mean(jnp.square(vtrace_returns.errors) * mask)
-
-            # total_loss = pg_loss + 0.5 * bl_loss + 0.01 * ent_loss
-            # total_loss = pg_loss + 0.5 * bl_loss + ent_loss
-
-            # # Get the importance weights.
-            # importance_weights = (1. / trajectory.priorities).astype(jnp.float32)
-            # importance_weights **= self._importance_sampling_exponent
-            # importance_weights /= jnp.max(importance_weights)
-            #
-            # # Reweight.
-            # loss = jnp.mean(importance_weights * bl_loss)
-            new_priorities = jnp.abs(vtrace_returns.errors) + 1e-7
-
-            return loss, (pg_advantage, new_priorities)
-
-        def actor_loss(trajectory, pg_advantage, key) -> jnp.ndarray:
-            logits = actor_network(trajectory.experience["obs"][0])
-            learner_logits = logits[:-1]
-            actions = trajectory.experience["actions"][0, :-1]
-
-            mask = jnp.not_equal(trajectory.experience["step"][0, 1:], int(dm_env.StepType.FIRST))
-            mask = mask.astype(jnp.float32)
-
-            state_reward_noise = _reward_noise_over_actions(trajectory.experience["obs"][0])
-
-            tb_pg_loss_fn = jax.vmap(rlax.policy_gradient_loss, in_axes=1, out_axes=0)
-            pg_loss = tb_pg_loss_fn(jnp.expand_dims(learner_logits, axis=1), actions, pg_advantage, mask)
-            pg_loss = jnp.mean(pg_loss)
-
-            # pg_loss = jnp.mean(action_probs[:-1] * (-jax.nn.log_softmax(learner_logits) * state_reward_noise[:-1] - q_fn[:-1]))
+            entropy = policy_dist.entropy()
 
             entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(learner_logits, axis=1),
                                                                 jnp.expand_dims(state_reward_noise[:-1], axis=1),
@@ -213,7 +159,10 @@ class ActorCritic(base.Agent):
             # ent_loss = ent_loss_fn(jnp.expand_dims(learner_logits, axis=1), jnp.expand_dims(mask, axis=-1))
             # ent_loss = jnp.mean(ent_loss)
 
-            return 0.5 * pg_loss + 0.01 * ent_loss
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) - tau * entropy)
+            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiple the entropy potentially
+
+            return policy_loss + value_loss, (entropy, jax.lax.stop_gradient(ensembled_reward_sep))
 
         # Transform the loss into a pure function.
         critic_loss_fn = hk.without_apply_rng(hk.transform(critic_loss)).apply
@@ -401,28 +350,23 @@ class ActorCritic(base.Agent):
 
 def default_agent(obs_spec: specs.Array,
                   action_spec: specs.DiscreteArray,
+                  config,
                   seed: int = 0) -> base.Agent:
     """Creates an actor-critic agent with default hyperparameters."""
 
-    def policy_network(inputs: jnp.ndarray) -> Logits:
+    def network(inputs: jnp.ndarray) -> Tuple[Logits, Value]:
         flat_inputs = hk.Flatten()(inputs)
         torso = hk.nets.MLP([64, 64])
         policy_head = hk.Linear(action_spec.num_values)
+        # value_head = hk.Linear(action_spec.num_values)
+        value_head = hk.Linear(1)
         embedding = torso(flat_inputs)
         logits = policy_head(embedding)
-        return logits
-
-    def value_network(inputs: jnp.ndarray) -> Value:
-        flat_inputs = hk.Flatten()(inputs)
-        torso = hk.nets.MLP([64, 64])
-        value_head = hk.Linear(action_spec.num_values)
-        # value_head = hk.Linear(1)
-        embedding = torso(flat_inputs)
         value = value_head(embedding)
-        return value
-        # return jnp.squeeze(value, axis=-1)
+        # return logits, value  #  jnp.squeeze(value, axis=-1)
+        return logits, jnp.squeeze(value, axis=-1)
 
-    prior_scale = 5.
+    prior_scale = config.PRIOR_SCALE
     hidden_sizes = [50, 50]
 
     def ensemble_network(obs: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
@@ -438,17 +382,17 @@ def default_agent(obs_spec: specs.Array,
     return ActorCritic(
         obs_spec=obs_spec,
         action_spec=action_spec,
-        actor_network=policy_network,
-        critic_network=value_network,
+        network=network,
         ensemble_network=ensemble_network,
-        optimizer=optax.adam(3e-3),
-        ensemble_optimizer=optax.adam(1e-4),
+        optimizer=optax.adam(config.LR),
+        ensemble_optimizer=optax.adam(config.ENS_LR),
         rng=hk.PRNGSequence(seed),
-        sequence_length=32,
-        discount=0.99,
-        td_lambda=0.9,
-        noise_scale=0.1,
-        mask_prob=0.8,
+        sequence_length=50,
+        discount=config.GAMMA,
+        td_lambda_val=config.TD_LAMBDA,
+        reward_noise_scale=config.REWARD_NOISE_SCALE,
+        mask_prob=config.MASK_PROB,
         num_ensemble=10,
+        init_tau=0.001
         importance_sampling_exponent=0.995
     )

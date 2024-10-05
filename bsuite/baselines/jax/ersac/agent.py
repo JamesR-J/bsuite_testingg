@@ -46,14 +46,6 @@ Value = jnp.ndarray
 PolicyValueNet = Callable[[jnp.ndarray], Tuple[Logits, Value]]
 
 
-def entropy_loss_fn(logits_t, uncertainty_t, mask):
-    log_pi = jax.nn.log_softmax(logits_t)
-    log_pi_pi = math.mul_exp(log_pi, log_pi)
-    entropy_per_timestep = -jnp.sum(log_pi_pi * uncertainty_t, axis=-1)
-    # entropy_per_timestep = -jnp.sum(log_pi * uncertainty_t, axis=-1)
-    return -jnp.mean(entropy_per_timestep * mask)
-
-
 class EnsembleTrainingState(NamedTuple):
     params: hk.Params
     opt_state: Any
@@ -130,7 +122,7 @@ class ActorCritic(base.Agent):
             entropy = policy_dist.entropy()
 
             policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) - tau * entropy)
-            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiple the entropy potentially
+            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiply the entropy potentially
 
             return policy_loss + value_loss, (entropy, jax.lax.stop_gradient(ensembled_reward_sep))
 
@@ -195,7 +187,7 @@ class ActorCritic(base.Agent):
                 self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
                 ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
-            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2, first_ensemble):
+            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
                 metric_dict = {"policy_and_value_loss": pv_loss,
                                "tau": tau,
                                "tau_loss": tau_loss_val,
@@ -211,7 +203,7 @@ class ActorCritic(base.Agent):
                     wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
 
             jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val,
-                                         ensemble_loss_all, reward_pred, reward_pred_2, first_ensemble)
+                                         ensemble_loss_all, reward_pred, reward_pred_2)
             # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
 
             return TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
