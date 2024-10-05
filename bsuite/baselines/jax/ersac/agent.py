@@ -165,7 +165,7 @@ class ActorCritic(base.Agent):
                                          step=state.step + 1), ensemble_loss_val
 
         # Define update function.
-        @jax.jit
+        # @jax.jit
         def sgd_step(state: TrainingState,
                      trajectory: sequence.Trajectory) -> TrainingState:
             """Does a step of SGD over a trajectory."""

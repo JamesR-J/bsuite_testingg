@@ -66,8 +66,8 @@ def run(og_bsuite_id: str) -> str:
              # entity=config.WANDB_ENTITY,
              config=config,
              group="ersac_testing",
-             # mode="disabled",
-             mode="online",
+             mode="disabled",
+             # mode="online",
              )
 
   env = bsuite.load_and_record(

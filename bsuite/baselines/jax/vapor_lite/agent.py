@@ -138,14 +138,14 @@ class ActorCritic(base.Agent):
             state_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
 
             td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
-            k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
+            q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
                                    jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
                                    jnp.expand_dims(trajectory.discounts * discount, axis=-1),
                                    jnp.expand_dims(values[1:], axis=-1),
                                    jnp.array(td_lambda_val),
                                    )
 
-            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)))
+            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate - tau * log_prob)))
             # TODO is it right to use [1:] for these values etc or [:-1]?
 
             entropy = policy_dist.entropy()
