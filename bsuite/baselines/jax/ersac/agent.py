@@ -121,7 +121,7 @@ class ActorCritic(base.Agent):
 
             entropy = policy_dist.entropy()
 
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) - tau * entropy)
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1] - tau * entropy))
             # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiply the entropy potentially
 
             return policy_loss + value_loss, (entropy, jax.lax.stop_gradient(ensembled_reward_sep))
@@ -165,7 +165,7 @@ class ActorCritic(base.Agent):
                                          step=state.step + 1), ensemble_loss_val
 
         # Define update function.
-        # @jax.jit
+        @jax.jit
         def sgd_step(state: TrainingState,
                      trajectory: sequence.Trajectory) -> TrainingState:
             """Does a step of SGD over a trajectory."""
@@ -179,35 +179,9 @@ class ActorCritic(base.Agent):
             new_tau_params = optax.apply_updates(state.tau_params, tau_updates)
             tau = jnp.exp(new_tau_params)
 
-            ensemble_loss_all = jnp.zeros((self._num_ensemble,))
-            for k, ensemble_state in enumerate(self._ensemble):
-                transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
-                               trajectory.mask[:, k], trajectory.noise[:, k]]
-                # TODO is this right observations [:-1]
-                self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
-                ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
+            return (TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
+                                 tau_opt_state=new_tau_opt_state), pv_loss, tau, tau_loss_val, reward_pred, reward_pred_2)
 
-            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
-                metric_dict = {"policy_and_value_loss": pv_loss,
-                               "tau": tau,
-                               "tau_loss": tau_loss_val,
-                               # "model_params": first_ensemble
-                               }
-                for ensemble_id, _ in enumerate(self._ensemble):
-                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_pv"] = reward_pred[ensemble_id, 6]
-                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_tau"] =  reward_pred_2[ensemble_id, 6]
-
-                wandb.log(metric_dict)
-
-                for ensemble_id, _ in enumerate(self._ensemble):
-                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
-
-            jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val,
-                                         ensemble_loss_all, reward_pred, reward_pred_2)
-            # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
-
-            return TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
-                                 tau_opt_state=new_tau_opt_state)
 
         # Initialize network parameters and optimiser state.
         init, forward = hk.without_apply_rng(hk.transform(network))
@@ -221,7 +195,8 @@ class ActorCritic(base.Agent):
         ]
         initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
 
-        log_tau = jnp.asarray(jnp.log(init_tau), dtype=jnp.float32)
+        # log_tau = jnp.asarray(jnp.log(init_tau), dtype=jnp.float32)
+        log_tau = jnp.asarray(init_tau, dtype=jnp.float32)  # TODO unsure how to init this val
         tau_opt_state = tau_optimizer.init(log_tau)
 
         # Internalize state.
@@ -268,7 +243,34 @@ class ActorCritic(base.Agent):
 
         if self._buffer.full() or new_timestep.last():
             trajectory = self._buffer.drain()
-            self._state = self._sgd_step(self._state, trajectory)
+            self._state, pv_loss, tau, tau_loss_val, reward_pred, reward_pred_2 = self._sgd_step(self._state, trajectory)
+
+            ensemble_loss_all = jnp.zeros((self._num_ensemble,))
+            for k, ensemble_state in enumerate(self._ensemble):
+                transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
+                               trajectory.mask[:, k], trajectory.noise[:, k]]
+                # TODO is this right observations [:-1]
+                self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
+                ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
+
+            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
+                metric_dict = {"policy_and_value_loss": pv_loss,
+                               "tau": tau,
+                               "tau_loss": tau_loss_val,
+                               # "model_params": first_ensemble
+                               }
+                for ensemble_id, _ in enumerate(self._ensemble):
+                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_pv"] = reward_pred[ensemble_id, 6]
+                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_tau"] = reward_pred_2[ensemble_id, 6]
+
+                wandb.log(metric_dict)
+
+                for ensemble_id, _ in enumerate(self._ensemble):
+                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
+
+            jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val,
+                                         ensemble_loss_all, reward_pred, reward_pred_2)
+            # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
 
         return buffer_state
 

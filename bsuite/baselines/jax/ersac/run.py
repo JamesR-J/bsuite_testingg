@@ -50,7 +50,7 @@ def run(og_bsuite_id: str) -> str:
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
   config = config_dict.ConfigDict()
-  config.PRIOR_SCALE = 0.5  # 0.5
+  config.PRIOR_SCALE = 5  # 0.5
   config.LR = 1e-3
   config.ENS_LR = 1e-3
   config.TAU_LR = 1e-3
@@ -66,8 +66,8 @@ def run(og_bsuite_id: str) -> str:
              # entity=config.WANDB_ENTITY,
              config=config,
              group="ersac_testing",
-             mode="disabled",
-             # mode="online",
+             # mode="disabled",
+             mode="online",
              )
 
   env = bsuite.load_and_record(
