@@ -40,6 +40,8 @@ import jax.numpy as jnp
 from rlax._src import distributions
 from distrax._src.utils import math
 import flashbax
+from functools import partial
+import wandb
 
 Array = chex.Array
 Logits = jnp.ndarray
@@ -57,7 +59,6 @@ def entropy_loss_fn(logits_t, uncertainty_t, mask):
 
 class EnsembleTrainingState(NamedTuple):
     params: hk.Params
-    target_params: hk.Params
     opt_state: Any
     step: int
 
@@ -98,44 +99,15 @@ class ActorCritic(base.Agent):
             num_ensemble: int,
             importance_sampling_exponent: int
     ):
-        def _get_reward_noise(obs, actions):
-            def single_reward_noise(state, obs, action):
-                reward_pred = ensemble_network.apply(state.params, obs, jnp.expand_dims(action, axis=-1))
-                return reward_pred
-
-            ensembled_reward_sep = jnp.zeros((num_ensemble, actions.shape[0], 1))
-            for k, state in enumerate(self._ensemble):
-                ensembled_reward_sep = ensembled_reward_sep.at[k].set(single_reward_noise(state, obs, actions))
-
-            SIGMA_SCALE = 3.0  # this are from other experiments
-            ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
-            # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
-            ensembled_reward = jnp.minimum(ensembled_reward, 1)
-
-            return ensembled_reward, ensembled_reward_sep
-
-        def _reward_noise_over_actions(obs: chex.Array) -> chex.Array:
-            # run the get_reward_noise for each action choice, can probs vmap
-            actions = jnp.expand_dims(jnp.arange(0, action_spec.num_values, step=1), axis=-1)
-            actions = jnp.tile(actions, obs.shape[0])
-            actions = jnp.expand_dims(actions, axis=-1)
-
-            obs = jnp.repeat(obs[jnp.newaxis, :], action_spec.num_values, axis=0)
-
-            reward_over_actions = jax.vmap(_get_reward_noise, in_axes=(0, 0))(obs, actions)
-            reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
-
-            return reward_over_actions
-
         # Define loss function.
-        def loss(trajectory) -> jnp.ndarray:
+        def loss(trajectory, state_action_reward_noise, state_reward_noise) -> jnp.ndarray:
             """"Actor-critic loss."""
             logits, values = network(trajectory.observations)
             policy_dist = distrax.Softmax(logits=logits[:-1])
             log_prob = policy_dist.log_prob(trajectory.actions)
 
-            state_action_reward_noise, ensembled_reward_sep = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
-            state_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
+            # state_action_reward_noise, ensembled_reward_sep = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
+            # state_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
 
             td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
             q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
@@ -150,7 +122,7 @@ class ActorCritic(base.Agent):
 
             entropy = policy_dist.entropy()
 
-            entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(learner_logits, axis=1),
+            entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(logits[:-1], axis=1),
                                                                 jnp.expand_dims(state_reward_noise[:-1], axis=1),
                                                                 mask)
             ent_loss = jnp.mean(entropy_loss)
@@ -162,14 +134,7 @@ class ActorCritic(base.Agent):
             policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) - tau * entropy)
             # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiple the entropy potentially
 
-            return policy_loss + value_loss, (entropy, jax.lax.stop_gradient(ensembled_reward_sep))
-
-        # Transform the loss into a pure function.
-        critic_loss_fn = hk.without_apply_rng(hk.transform(critic_loss)).apply
-        actor_loss_fn = hk.without_apply_rng(hk.transform(actor_loss)).apply
-
-        # Transform the (impure) network into a pure function.
-        ensemble_network = hk.without_apply_rng(hk.transform(ensemble_network))
+            return policy_loss + value_loss
 
         # Define loss function, including bootstrap mask `m_t` & reward noise `z_t`.
         def ensemble_loss(params: hk.Params,
@@ -177,46 +142,16 @@ class ActorCritic(base.Agent):
             """Q-learning loss with added reward noise + half-in bootstrap."""
             o_tm1, a_tm1, r_t, m_t, z_t = transitions
             r_t_pred = ensemble_network.apply(params, o_tm1, a_tm1)
-            r_t += noise_scale * z_t
-            return 0.5 * jnp.mean(m_t * jnp.square(r_t - r_t_pred))  # TODO is this right?
+            # r_t += noise_scale * z_t  # TODO for off policy stuff
+            loss = 0.5 * jnp.mean(m_t * jnp.square(r_t - r_t_pred))
 
-        # Define update function.
-        @jax.jit
-        def sgd_step(critic_state: TrainingState,
-                     actor_state: TrainingState,
-                     buffer_state,
-                     trajectory: sequence.Trajectory,
-                     key) -> TrainingState:
-            """Does a step of SGD over a trajectory."""
-            logits = self._actor_forward(self._actor_state.params, trajectory.experience["obs"][0])
-            # TODO above dodgy but cba to fix
-            gradients, (pg_advantage, new_priorities) = jax.grad(critic_loss_fn, has_aux=True)(critic_state.params, trajectory, logits, key)
-            updates, new_critic_opt_state = optimizer.update(gradients, critic_state.opt_state)
-            new_critic_params = optax.apply_updates(critic_state.params, updates)
+            return loss
 
+        # Transform the loss into a pure function.
+        loss_fn = hk.without_apply_rng(hk.transform(loss)).apply
 
-            # TODO update priorities
-            # new_priorities =
-            #
-            # buffer_state = self._fbx_buffer.set_priorities(buffer_state, trajectory.indices, new_priorities)
-
-            gradients = jax.grad(actor_loss_fn)(actor_state.params, trajectory, pg_advantage, key)
-            updates, new_actor_opt_state = optimizer.update(gradients, actor_state.opt_state)
-            new_actor_params = optax.apply_updates(actor_state.params, updates)
-
-            # ensrpr_state, key = uncertainty_loss(trajectory, state.reward_state, key)
-            for k, ensemble_state in enumerate(self._ensemble):
-                transitions = [trajectory.experience["obs"][0],
-                               trajectory.experience["actions"][0],
-                               trajectory.experience["rewards"][0],
-                               trajectory.experience["mask"][0, :, k],
-                               trajectory.experience["noise"][0, :, k]]
-                self._ensemble[k] = ensemble_sgd_step(ensemble_state, transitions)
-
-            return (TrainingState(params=new_critic_params, opt_state=new_critic_opt_state),
-                    TrainingState(params=new_actor_params, opt_state=new_actor_opt_state),
-                    buffer_state,
-                    key)
+        # Transform the (impure) network into a pure function.
+        ensemble_network = hk.without_apply_rng(hk.transform(ensemble_network))
 
         # Define update function for each member of ensemble..
         @jax.jit
@@ -228,50 +163,66 @@ class ActorCritic(base.Agent):
             updates, new_opt_state = ensemble_optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
-            # print(new_params)
-
-            return EnsembleTrainingState(
-                params=new_params,
+            return EnsembleTrainingState(params=new_params,
                 target_params=state.target_params,
                 opt_state=new_opt_state,
                 step=state.step + 1)
 
+        # Define update function.
+        @jax.jit
+        def sgd_step(state: TrainingState,
+                     buffer_state,
+                     trajectory: sequence.Trajectory,
+                     state_action_reward_noise,
+                     state_reward_noise) -> TrainingState:
+            """Does a step of SGD over a trajectory."""
+            pv_loss, gradients = jax.value_and_grad(loss_fn, has_aux=False)(state.params, trajectory,
+                                                                            state_action_reward_noise,
+                                                                            state_reward_noise)
+            updates, new_opt_state = optimizer.update(gradients, state.opt_state)
+            new_params = optax.apply_updates(state.params, updates)
+
+
+            # TODO update priorities
+            # new_priorities =
+            #
+            # buffer_state = self._fbx_buffer.set_priorities(buffer_state, trajectory.indices, new_priorities)
+
+            return (TrainingState(params=new_params, opt_state=new_opt_state),
+                    pv_loss,
+                    buffer_state)
+
+
+
         # Initialize network parameters and optimiser state.
-        critic_init, critic_forward = hk.without_apply_rng(hk.transform(critic_network))
-        actor_init, actor_forward = hk.without_apply_rng(hk.transform(actor_network))
+        init, forward = hk.without_apply_rng(hk.transform(network))
         dummy_observation = jnp.zeros((1, *obs_spec.shape), dtype=jnp.float32)
         dummy_action = jnp.zeros((1, 1), dtype=jnp.int32)
-        initial_critic_params = critic_init(next(rng), dummy_observation)
-        initial_actor_params = critic_init(next(rng), dummy_observation)
-        initial_opt_state = optimizer.init(initial_critic_params)
+        initial_params = init(next(rng), dummy_observation)
+        initial_opt_state = optimizer.init(initial_params)
 
-        sample_seq_length = obs_spec.shape[0]  # TODO needs to be size of env
-        self._fbx_buffer = flashbax.make_prioritised_trajectory_buffer(add_batch_size=2,
-                                                                       sample_batch_size=2,
-                                                                       sample_sequence_length=sample_seq_length+1,
-                                                                       period=sample_seq_length+1, # So no overlap in trajs?
-                                                                       min_length_time_axis=1,
-                                                                       max_size=100,
-                                                                       priority_exponent=0.6
-                                                                       )
+        # sample_seq_length = obs_spec.shape[0]  # TODO needs to be size of env
+        # self._fbx_buffer = flashbax.make_prioritised_trajectory_buffer(add_batch_size=2,
+        #                                                                sample_batch_size=2,
+        #                                                                sample_sequence_length=sample_seq_length+1,
+        #                                                                period=sample_seq_length+1, # So no overlap in trajs?
+        #                                                                min_length_time_axis=1,
+        #                                                                max_size=100,
+        #                                                                priority_exponent=0.6
+        #                                                                )
 
         initial_ensemble_params = [
-            ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
-        ]
-        initial_ensemble_target_params = [
             ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
         ]
         initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
 
         # Internalize state.
-        self._critic_state = TrainingState(initial_critic_params, initial_opt_state)
-        self._actor_state = TrainingState(initial_actor_params, initial_opt_state)
+        self._state = TrainingState(initial_params, initial_opt_state)
         self._ensemble = [
-            EnsembleTrainingState(p, tp, o, step=0) for p, tp, o in zip(
-                initial_ensemble_params, initial_ensemble_target_params, initial_ensemble_opt_state)
+            EnsembleTrainingState(p, o, step=0) for p, o in zip(
+                initial_ensemble_params, initial_ensemble_opt_state)
         ]
-        self._critic_forward = jax.jit(critic_forward)
-        self._actor_forward = jax.jit(actor_forward)
+        self._forward = jax.jit(forward)
         self._ensemble_forward = jax.jit(ensemble_network.apply)
         self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length, num_ensemble)
         self._sgd_step = sgd_step
@@ -302,14 +253,42 @@ class ActorCritic(base.Agent):
         action = jax.random.categorical(key, logits).squeeze()
         return int(action), logits
 
-    def update(
-            self,
+    @partial(jax.jit, static_argnums=(0,))
+    def _single_reward_noise(self, state, obs, action):
+        reward_pred = self._ensemble_forward(state.params, obs, jnp.expand_dims(action, axis=-1))
+        return reward_pred
+
+    def _get_reward_noise(self, obs, actions):
+        ensembled_reward_sep = jnp.zeros((self._num_ensemble, actions.shape[0], 1))
+        for k, state in enumerate(self._ensemble):
+            ensembled_reward_sep = ensembled_reward_sep.at[k].set(self._single_reward_noise(state, obs, actions))
+
+        SIGMA_SCALE = 3.0  # this are from other experiments
+        ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
+        # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
+        ensembled_reward = jnp.minimum(ensembled_reward, 1)
+
+        return ensembled_reward, ensembled_reward_sep
+
+    def _reward_noise_over_actions(self, obs: chex.Array) -> chex.Array:  # TODO sort this oot
+        # run the get_reward_noise for each action choice, can probs vmap
+        actions = jnp.expand_dims(jnp.arange(0, self._action_spec.num_values, step=1), axis=-1)
+        actions = jnp.tile(actions, obs.shape[0])
+        actions = jnp.expand_dims(actions, axis=-1)
+
+        obs = jnp.repeat(obs[jnp.newaxis, :], self._action_spec.num_values, axis=0)
+
+        reward_over_actions = jax.vmap(self._get_reward_noise, in_axes=(0, 0))(obs, actions)
+        reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
+
+        return reward_over_actions
+
+    def update(self,
             timestep: dm_env.TimeStep,
             action: base.Action,
             logits,
             new_timestep: dm_env.TimeStep,
             buffer_state,
-            key
     ):
         """Adds a transition to the trajectory buffer and periodically does SGD."""
         mask = np.random.binomial(1, self._mask_prob, self._num_ensemble)
@@ -319,8 +298,6 @@ class ActorCritic(base.Agent):
 
         # self._buffer.append(timestep, action, logits, new_timestep, mask, noise)  # TODO ignore this dodgyness for now
         # if self._buffer.full() or new_timestep.last():
-        #     trajectory = self._buffer.drain()
-        #     self._state, key = self._sgd_step(self._state, trajectory, key)
         if new_timestep.last():
             trajectory = self._buffer.drain()
             buffer_data = {"obs": trajectory.observations,
@@ -334,18 +311,46 @@ class ActorCritic(base.Agent):
                            }
             broadcast_fn = lambda x: jnp.broadcast_to(x, (2, *x.shape))  # add batch dim
             fake_batch_sequence = jax.tree_util.tree_map(broadcast_fn, buffer_data)
-            buffer_state = self._fbx_buffer.add(buffer_state,
-                                                fake_batch_sequence
-                                                )
-            key, _key = jrandom.split(key)
-            batch = self._fbx_buffer.sample(buffer_state, _key)
-            self._critic_state, self._actor_state, buffer_state, key = self._sgd_step(self._critic_state,
-                                                                                      self._actor_state,
-                                                                                      buffer_state,
-                                                                                      batch,
-                                                                                      key)
+            # buffer_state = self._fbx_buffer.add(buffer_state,
+            #                                     fake_batch_sequence
+            #                                     )
+            # batch = self._fbx_buffer.sample(buffer_state, _key)
 
-        return buffer_state, key
+            state_action_reward_noise, reward_pred = self._get_reward_noise(trajectory.observations[:-1],
+                                                                            trajectory.actions)
+            state_reward_noise = self._reward_noise_over_actions(trajectory.observations[:-1])
+
+            self._state, pv_loss, buffer_state = self._sgd_step(self._state,
+                                                                                      buffer_state,
+                                                                                      trajectory,
+                                                                state_action_reward_noise,
+                                                                state_reward_noise)
+
+            ensemble_loss_all = jnp.zeros((self._num_ensemble,))
+            for k, ensemble_state in enumerate(self._ensemble):
+                transitions = [trajectory.observations[:-1], trajectory.actions, trajectory.rewards,
+                               trajectory.mask[:, k], trajectory.noise[:, k]]
+                # TODO is this right observations [:-1]
+                self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
+                ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
+
+            def callback(pv_loss, ensemble_loss_all, reward_pred):
+                metric_dict = {"policy_and_value_loss": pv_loss,
+                               # "model_params": first_ensemble
+                               }
+                for ensemble_id, _ in enumerate(self._ensemble):
+                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_pv"] = reward_pred[ensemble_id, 6]
+                    metric_dict[f"Ensemble_{ensemble_id}_Loss"] = ensemble_loss_all[ensemble_id]
+
+                wandb.log(metric_dict)
+
+
+            jax.experimental.io_callback(callback, None, pv_loss,
+                                         ensemble_loss_all, reward_pred)
+            # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
+
+
+        return buffer_state
 
 
 def default_agent(obs_spec: specs.Array,

@@ -16,5 +16,5 @@
 """A simple actor-critic implementation in JAX."""
 
 from bsuite.baselines.jax.ersac.agent import ActorCritic
-from bsuite.baselines.jax.ersac.agent import default_agent
+from bsuite.baselines.jax.ersac.agent_off_policy import default_agent
 from bsuite.baselines.jax.ersac import utils
