@@ -247,6 +247,8 @@ class ActorCritic(base.Agent):
         if self._buffer.full() or new_timestep.last():
             trajectory = self._buffer.drain()
 
+            check_obs = trajectory.observations
+
             state_action_reward_noise, reward_pred = self._get_reward_noise(trajectory.observations[:-1],
                                                                                 trajectory.actions)
 

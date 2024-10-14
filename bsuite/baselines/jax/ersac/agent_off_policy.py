@@ -97,33 +97,37 @@ class ActorCritic(base.Agent):
 
             log_prob, entropy = jax.vmap(get_log_prob)(logits[:, :-1], batch.experience["actions"][:, :-1])
 
-            td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
-            k_estimate = td_lambda(values[:, :-1],
-                                   jnp.squeeze(batch.experience["rewards"][:, :-1] + (
-                                           state_action_reward_noise / (2 * tau)), axis=-1),
-                                   jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
-                                   values[:, 1:],
-                                   td_lambda_val,
-                                   )
+            # TODO should be vmapping over batch and running in the trajectory legnth dim
+            # td_lambda = jax.vmap(rlax.td_lambda, in_axes=(0, 0, 0, 0, None), out_axes=0)
+            # k_estimate = td_lambda(values[:, :-1],
+            #                        jnp.squeeze(batch.experience["rewards"][:, :-1] + (
+            #                                state_action_reward_noise / (2 * tau)), axis=-1),
+            #                        jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
+            #                        values[:, 1:],
+            #                        td_lambda_val,
+            #                        )
 
-            # rhos = rlax.categorical_importance_sampling_ratios(logits[:, :-1],
-            #                                                    batch.experience["logits"][:, :-1],
-            #                                                    batch.experience["actions"][:, :-1])
-            # vtrace_td_error = jax.vmap(rlax.vtrace, in_axes=(1, 1, 1, 1, 1, None), out_axes=1)
-            # k_estimate = vtrace_td_error(values[:, :-1],
-            #                                                values[:, 1:],
-            #                                                jnp.squeeze(batch.experience["rewards"][:, :-1] + (
-            #                                                            state_action_reward_noise / (2 * tau)), axis=-1),
-            #                                                jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
-            #                                                rhos,
-            #                                                0.9)
+            # TODO should be vmapping over batch and running in the trajectory legnth dim
+            rhos = rlax.categorical_importance_sampling_ratios(logits[:, :-1],
+                                                               batch.experience["logits"][:, :-1],
+                                                               batch.experience["actions"][:, :-1])
+            vtrace_td_error = jax.vmap(rlax.vtrace, in_axes=(0, 0, 0, 0, 0, None), out_axes=0)
+            k_estimate = vtrace_td_error(values[:, :-1],
+                                         values[:, 1:],
+                                         jnp.squeeze(batch.experience["rewards"][:, :-1] + (
+                                                 state_action_reward_noise / (2 * tau)), axis=-1),
+                                         jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
+                                         rhos,
+                                         0.9)
 
-            value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)), axis=-1)
+            value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)),
+                                  axis=-1)
             # TODO is it right to use [1:] for these values etc or [:-1]?
 
             # entropy = policy_dist.entropy()
 
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1] - tau * entropy), axis=-1)
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1] - tau * entropy),
+                                    axis=-1)
             # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiply the entropy potentially
 
             # TODO add re prioritisation, cba to do at this moment in time
@@ -187,8 +191,7 @@ class ActorCritic(base.Agent):
             tau = jnp.exp(new_tau_params)
 
             return (TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
-                                 tau_opt_state=new_tau_opt_state), pv_loss, tau, tau_loss_val)
-
+                                  tau_opt_state=new_tau_opt_state), pv_loss, tau, tau_loss_val)
 
         # Initialize network parameters and optimiser state.
         init, forward = hk.without_apply_rng(hk.transform(hk.BatchApply(network)))
@@ -213,8 +216,9 @@ class ActorCritic(base.Agent):
         self._batch_size = batch_size
         self._fbx_buffer = flashbax.make_prioritised_trajectory_buffer(add_batch_size=1,
                                                                        sample_batch_size=self._batch_size,
-                                                                       sample_sequence_length=sample_seq_length+1,
-                                                                       period=sample_seq_length+1, # So no overlap in trajs?
+                                                                       sample_sequence_length=sample_seq_length + 1,
+                                                                       period=sample_seq_length + 1,
+                                                                       # So no overlap in trajs?
                                                                        min_length_time_axis=1,
                                                                        max_size=10000,
                                                                        priority_exponent=1.0
@@ -250,6 +254,7 @@ class ActorCritic(base.Agent):
                          "noise": jnp.zeros((self._num_ensemble,)),
                          }
         return self._fbx_buffer.init(fake_timestep)
+
     def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
         """Selects actions according to a softmax policy."""
         key = next(self._rng)
@@ -291,10 +296,13 @@ class ActorCritic(base.Agent):
             trajectory = self._buffer.drain()
 
             buffer_data = {"obs": trajectory.observations,
-                           "actions": jnp.concatenate((trajectory.actions, jnp.zeros((1,), dtype=self._action_spec.dtype))),
+                           "actions": jnp.concatenate(
+                               (trajectory.actions, jnp.zeros((1,), dtype=self._action_spec.dtype))),
                            "logits": jnp.concatenate((trajectory.logits, jnp.zeros((1, 2)))),
-                           "rewards": jnp.concatenate((jnp.expand_dims(trajectory.rewards, axis=-1), jnp.zeros((1, 1)))),
-                           "discounts": jnp.concatenate((jnp.expand_dims(trajectory.discounts, axis=-1), jnp.zeros((1, 1)))),
+                           "rewards": jnp.concatenate(
+                               (jnp.expand_dims(trajectory.rewards, axis=-1), jnp.zeros((1, 1)))),
+                           "discounts": jnp.concatenate(
+                               (jnp.expand_dims(trajectory.discounts, axis=-1), jnp.zeros((1, 1)))),
                            "step": jnp.concatenate((jnp.expand_dims(trajectory.step, axis=-1), jnp.zeros((1, 1)))),
                            "mask": jnp.concatenate((trajectory.mask, jnp.zeros((1, self._num_ensemble)))),
                            "noise": jnp.concatenate((trajectory.noise, jnp.zeros((1, self._num_ensemble)))),
@@ -309,7 +317,7 @@ class ActorCritic(base.Agent):
             # TODO check it gets full trajectories and not random ones, can see this by the zero additions I have put at the end
 
             state_action_reward_noise, reward_pred = self._get_reward_noise(batch.experience["obs"][:, :-1],
-                                                                                batch.experience["actions"][:, :-1])
+                                                                            batch.experience["actions"][:, :-1])
 
             self._state, pv_loss, tau, tau_loss_val = self._sgd_step(self._state, batch, state_action_reward_noise)
 
@@ -369,6 +377,7 @@ def default_agent(obs_spec: specs.Array,
         return logits, jnp.squeeze(value, axis=-1)
 
     prior_scale = config.PRIOR_SCALE  # 0.1  # 5.
+
     # hidden_sizes = [50, 50]
 
     def ensemble_network(obs: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
