@@ -25,6 +25,9 @@ from bsuite.baselines import experiment
 from bsuite.baselines.jax import vapor_lite
 from bsuite.baselines.utils import pool
 
+from ml_collections import config_dict
+import wandb
+
 # Internal imports.
 
 # Experiment flags.
@@ -36,14 +39,37 @@ flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
 flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
                   'which form of logging to use for bsuite results')
 flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 2500, 'Overrides number of training eps.')
+flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
 flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
 
 FLAGS = flags.FLAGS
 
 
-def run(bsuite_id: str) -> str:
+def run(og_bsuite_id: str) -> str:
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
+
+  config = config_dict.ConfigDict()
+  config.PRIOR_SCALE = 1.0  # 5.0  # 0.5
+  config.LR = 1e-3
+  config.ENS_LR = 1e-4
+  config.TAU_LR = 1e-3  # 1e-2
+  config.GAMMA = 0.99
+  config.TD_LAMBDA = 0.8
+  config.REWARD_NOISE_SCALE = 0.1
+  config.MASK_PROB = 0.8  # 0.6
+  config.DEEP_SEA_MAP = 5  # 1  # 20
+  config.HIDDEN_SIZE = 50
+  config.ROLLOUT_LEN = 50  # TODO should this be longer than ep length? probs yes
+
+  bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
+
+  wandb.init(project="BSuite_Testing",
+             # entity=config.WANDB_ENTITY,
+             config=config,
+             group="vlite_testing",
+             # mode="disabled",
+             mode="online",
+             )
 
   env = bsuite.load_and_record(
       bsuite_id=bsuite_id,
@@ -52,7 +78,7 @@ def run(bsuite_id: str) -> str:
       overwrite=FLAGS.overwrite,
   )
 
-  agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec())
+  agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config)
 
   num_episodes = FLAGS.num_episodes or getattr(env, 'bsuite_num_episodes')
   experiment.run(

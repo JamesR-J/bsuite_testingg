@@ -52,8 +52,8 @@ PolicyValueNet = Callable[[jnp.ndarray], Tuple[Logits, Value]]
 def entropy_loss_fn(logits_t, uncertainty_t, mask):
     log_pi = jax.nn.log_softmax(logits_t)
     log_pi_pi = math.mul_exp(log_pi, log_pi)
-    entropy_per_timestep = -jnp.sum(log_pi_pi * uncertainty_t, axis=-1)
-    # entropy_per_timestep = -jnp.sum(log_pi * uncertainty_t, axis=-1)
+    # entropy_per_timestep = -jnp.sum(log_pi_pi * uncertainty_t, axis=-1)  # sigma log_pi pi
+    entropy_per_timestep = -jnp.sum(log_pi * uncertainty_t, axis=-1)  # sigma log_pi
     return -jnp.mean(entropy_per_timestep * mask)
 
 
@@ -94,7 +94,7 @@ class ActorCritic(base.Agent):
             sequence_length: int,
             discount: float,
             td_lambda_val: float,
-            noise_scale: float,
+            reward_noise_scale: float,
             mask_prob: float,
             num_ensemble: int,
             importance_sampling_exponent: int
@@ -105,9 +105,7 @@ class ActorCritic(base.Agent):
             logits, values = network(trajectory.observations)
             policy_dist = distrax.Softmax(logits=logits[:-1])
             log_prob = policy_dist.log_prob(trajectory.actions)
-
-            # state_action_reward_noise, ensembled_reward_sep = _get_reward_noise(trajectory.observations[:-1], trajectory.actions)
-            # state_reward_noise = _get_reward_noise(trajectory.observations, trajectory.actions)
+            action_probs = policy_dist.probs
 
             td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
             q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
@@ -117,22 +115,22 @@ class ActorCritic(base.Agent):
                                    jnp.array(td_lambda_val),
                                    )
 
-            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate - tau * log_prob)))
-            # TODO is it right to use [1:] for these values etc or [:-1]?
+            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
 
-            entropy = policy_dist.entropy()
-
+            mask = jnp.not_equal(trajectory.step, int(dm_env.StepType.FIRST))
+            mask = mask.astype(jnp.float32)
             entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(logits[:-1], axis=1),
-                                                                jnp.expand_dims(state_reward_noise[:-1], axis=1),
-                                                                mask)
-            ent_loss = jnp.mean(entropy_loss)
+                                                                jnp.expand_dims(state_reward_noise, axis=1),
+                                                                jnp.expand_dims(mask, axis=-1))
+            entropy = jnp.mean(entropy_loss)
 
             # ent_loss_fn = jax.vmap(rlax.entropy_loss, in_axes=1, out_axes=0)
             # ent_loss = ent_loss_fn(jnp.expand_dims(learner_logits, axis=1), jnp.expand_dims(mask, axis=-1))
             # ent_loss = jnp.mean(ent_loss)
 
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) - tau * entropy)
-            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiple the entropy potentially
+            # policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1]) - entropy)
+            #
+            policy_loss = jnp.mean(action_probs * entropy - q_estimate)
 
             return policy_loss + value_loss
 
@@ -141,9 +139,9 @@ class ActorCritic(base.Agent):
                           transitions: Sequence[jnp.ndarray]) -> jnp.ndarray:
             """Q-learning loss with added reward noise + half-in bootstrap."""
             o_tm1, a_tm1, r_t, m_t, z_t = transitions
-            r_t_pred = ensemble_network.apply(params, o_tm1, a_tm1)
-            # r_t += noise_scale * z_t  # TODO for off policy stuff
-            loss = 0.5 * jnp.mean(m_t * jnp.square(r_t - r_t_pred))
+            r_t_pred = ensemble_network.apply(params, o_tm1, jnp.expand_dims(a_tm1, axis=-1))
+            # r_t += reward_noise_scale * z_t  # TODO don't need this when on policy
+            loss = 0.5 * jnp.mean(m_t * jnp.square(r_t - jnp.squeeze(r_t_pred, axis=-1)))  # TODO is this right?
 
             return loss
 
@@ -156,17 +154,16 @@ class ActorCritic(base.Agent):
         # Define update function for each member of ensemble..
         @jax.jit
         def ensemble_sgd_step(state: EnsembleTrainingState,
-                              transitions: Sequence[jnp.ndarray]) -> EnsembleTrainingState:
+                              transitions: Sequence[jnp.ndarray]) -> Tuple[EnsembleTrainingState, Any]:
             """Does a step of SGD for the whole ensemble over `transitions`."""
 
-            gradients = jax.grad(ensemble_loss)(state.params, transitions)
+            ensemble_loss_val, gradients = jax.value_and_grad(ensemble_loss)(state.params, transitions)
             updates, new_opt_state = ensemble_optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
             return EnsembleTrainingState(params=new_params,
-                target_params=state.target_params,
-                opt_state=new_opt_state,
-                step=state.step + 1)
+                                         opt_state=new_opt_state,
+                                         step=state.step + 1), ensemble_loss_val
 
         # Define update function.
         @jax.jit
@@ -226,6 +223,7 @@ class ActorCritic(base.Agent):
         self._ensemble_forward = jax.jit(ensemble_network.apply)
         self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length, num_ensemble)
         self._sgd_step = sgd_step
+        self._ensemble_sgd_step = ensemble_sgd_step
         self._rng = rng
         self._num_ensemble = num_ensemble
         self._mask_prob = mask_prob
@@ -234,22 +232,23 @@ class ActorCritic(base.Agent):
         self._importance_sampling_exponent = importance_sampling_exponent
 
     def return_buffer(self):
-        fake_timestep = {"obs": jnp.zeros((*self._obs_spec.shape,)),
-                         "actions": jnp.zeros((1,), dtype=self._action_spec.dtype),
-                         "logits": jnp.zeros((self._action_spec.num_values,)),
-                         "rewards": jnp.zeros((1,)),
-                         "discounts": jnp.zeros((1,)),
-                         "step": jnp.zeros((1,)),
-                         "mask": jnp.zeros((self._num_ensemble,)),
-                         "noise": jnp.zeros((self._num_ensemble,)),
-                         }
-        return self._fbx_buffer.init(fake_timestep)
+        # fake_timestep = {"obs": jnp.zeros((*self._obs_spec.shape,)),
+        #                  "actions": jnp.zeros((1,), dtype=self._action_spec.dtype),
+        #                  "logits": jnp.zeros((self._action_spec.num_values,)),
+        #                  "rewards": jnp.zeros((1,)),
+        #                  "discounts": jnp.zeros((1,)),
+        #                  "step": jnp.zeros((1,)),
+        #                  "mask": jnp.zeros((self._num_ensemble,)),
+        #                  "noise": jnp.zeros((self._num_ensemble,)),
+        #                  }
+        # return self._fbx_buffer.init(fake_timestep)
+        return None
 
     def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
         """Selects actions according to a softmax policy."""
         key = next(self._rng)
         observation = timestep.observation[None, ...]
-        logits = self._actor_forward(self._actor_state.params, observation)
+        logits, _ = self._forward(self._state.params, observation)
         action = jax.random.categorical(key, logits).squeeze()
         return int(action), logits
 
@@ -273,12 +272,12 @@ class ActorCritic(base.Agent):
     def _reward_noise_over_actions(self, obs: chex.Array) -> chex.Array:  # TODO sort this oot
         # run the get_reward_noise for each action choice, can probs vmap
         actions = jnp.expand_dims(jnp.arange(0, self._action_spec.num_values, step=1), axis=-1)
-        actions = jnp.tile(actions, obs.shape[0])
-        actions = jnp.expand_dims(actions, axis=-1)
+        actions = jnp.broadcast_to(actions, (actions.shape[0], obs.shape[0]))
 
-        obs = jnp.repeat(obs[jnp.newaxis, :], self._action_spec.num_values, axis=0)
+        obs = jnp.broadcast_to(obs, (actions.shape[0], *obs.shape))
 
-        reward_over_actions = jax.vmap(self._get_reward_noise, in_axes=(0, 0))(obs, actions)
+        reward_over_actions, _ = jax.vmap(self._get_reward_noise, in_axes=(0, 0))(obs, actions)
+        # TODO is the above okay since it is a loop?
         reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
 
         return reward_over_actions
@@ -300,21 +299,21 @@ class ActorCritic(base.Agent):
         # if self._buffer.full() or new_timestep.last():
         if new_timestep.last():
             trajectory = self._buffer.drain()
-            buffer_data = {"obs": trajectory.observations,
-                           "actions": jnp.expand_dims(trajectory.actions, axis=-1),
-                           "logits": trajectory.logits,
-                           "rewards": jnp.expand_dims(trajectory.rewards, axis=-1),
-                           "discounts": jnp.expand_dims(trajectory.discounts, axis=-1),
-                           "step": jnp.expand_dims(trajectory.step, axis=-1),
-                           "mask": trajectory.mask,
-                           "noise": trajectory.noise,
-                           }
-            broadcast_fn = lambda x: jnp.broadcast_to(x, (2, *x.shape))  # add batch dim
-            fake_batch_sequence = jax.tree_util.tree_map(broadcast_fn, buffer_data)
-            # buffer_state = self._fbx_buffer.add(buffer_state,
-            #                                     fake_batch_sequence
-            #                                     )
-            # batch = self._fbx_buffer.sample(buffer_state, _key)
+            # buffer_data = {"obs": trajectory.observations,
+            #                "actions": jnp.expand_dims(trajectory.actions, axis=-1),
+            #                "logits": trajectory.logits,
+            #                "rewards": jnp.expand_dims(trajectory.rewards, axis=-1),
+            #                "discounts": jnp.expand_dims(trajectory.discounts, axis=-1),
+            #                "step": jnp.expand_dims(trajectory.step, axis=-1),
+            #                "mask": trajectory.mask,
+            #                "noise": trajectory.noise,
+            #                }
+            # broadcast_fn = lambda x: jnp.broadcast_to(x, (2, *x.shape))  # add batch dim
+            # fake_batch_sequence = jax.tree_util.tree_map(broadcast_fn, buffer_data)
+            # # buffer_state = self._fbx_buffer.add(buffer_state,
+            # #                                     fake_batch_sequence
+            # #                                     )
+            # # batch = self._fbx_buffer.sample(buffer_state, _key)
 
             state_action_reward_noise, reward_pred = self._get_reward_noise(trajectory.observations[:-1],
                                                                             trajectory.actions)
@@ -343,6 +342,9 @@ class ActorCritic(base.Agent):
                     metric_dict[f"Ensemble_{ensemble_id}_Loss"] = ensemble_loss_all[ensemble_id]
 
                 wandb.log(metric_dict)
+
+                for ensemble_id, _ in enumerate(self._ensemble):
+                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
 
 
             jax.experimental.io_callback(callback, None, pv_loss,
@@ -398,6 +400,5 @@ def default_agent(obs_spec: specs.Array,
         reward_noise_scale=config.REWARD_NOISE_SCALE,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
-        init_tau=0.001
         importance_sampling_exponent=0.995
     )
