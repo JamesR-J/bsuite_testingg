@@ -107,15 +107,25 @@ class ActorCritic(base.Agent):
             log_prob = policy_dist.log_prob(trajectory.actions)
             action_probs = policy_dist.probs
 
-            td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
-            q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
-                                   jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
-                                   jnp.expand_dims(trajectory.discounts * discount, axis=-1),
-                                   jnp.expand_dims(values[1:], axis=-1),
-                                   jnp.array(td_lambda_val),
-                                   )
-
-            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
+            # td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
+            # q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
+            #                        jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
+            #                        jnp.expand_dims(trajectory.discounts * discount, axis=-1),
+            #                        jnp.expand_dims(values[1:], axis=-1),
+            #                        jnp.array(td_lambda_val),
+            #                        )
+            #
+            # value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
+            #
+            q_targets = values[1:]
+            policy_dist_next = distrax.Softmax(logits=logits[1:])
+            action_probs_next = policy_dist_next.probs
+            qf = jnp.sum(action_probs_next * q_targets, axis=-1)
+            next_q = (trajectory.rewards + jnp.squeeze(state_action_reward_noise, axis=-1) +
+                      trajectory.discounts * discount * qf)
+            q_curr = values[:-1]
+            q_a_curr = jnp.take_along_axis(q_curr, jnp.expand_dims(trajectory.actions, axis=-1), axis=1)
+            value_loss = jnp.mean((jnp.square(jnp.squeeze(q_a_curr, axis=-1) - next_q)))
 
             mask = jnp.not_equal(trajectory.step, int(dm_env.StepType.FIRST))
             mask = mask.astype(jnp.float32)
@@ -124,13 +134,9 @@ class ActorCritic(base.Agent):
                                                                 jnp.expand_dims(mask, axis=-1))
             entropy = jnp.mean(entropy_loss)
 
-            # ent_loss_fn = jax.vmap(rlax.entropy_loss, in_axes=1, out_axes=0)
-            # ent_loss = ent_loss_fn(jnp.expand_dims(learner_logits, axis=1), jnp.expand_dims(mask, axis=-1))
-            # ent_loss = jnp.mean(ent_loss)
-
             # policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1]) - entropy)
             #
-            policy_loss = jnp.mean(action_probs * entropy - q_estimate)
+            policy_loss = -jnp.mean(action_probs * entropy - q_curr)
 
             return policy_loss + value_loss
 
@@ -365,13 +371,13 @@ def default_agent(obs_spec: specs.Array,
         flat_inputs = hk.Flatten()(inputs)
         torso = hk.nets.MLP([64, 64])
         policy_head = hk.Linear(action_spec.num_values)
-        # value_head = hk.Linear(action_spec.num_values)
-        value_head = hk.Linear(1)
+        value_head = hk.Linear(action_spec.num_values)
+        # value_head = hk.Linear(1)
         embedding = torso(flat_inputs)
         logits = policy_head(embedding)
         value = value_head(embedding)
-        # return logits, value  #  jnp.squeeze(value, axis=-1)
-        return logits, jnp.squeeze(value, axis=-1)
+        return logits, value  #  jnp.squeeze(value, axis=-1)
+        # return logits, jnp.squeeze(value, axis=-1)
 
     prior_scale = config.PRIOR_SCALE
     hidden_sizes = [50, 50]

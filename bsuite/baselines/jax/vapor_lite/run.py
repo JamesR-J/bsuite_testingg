@@ -57,7 +57,7 @@ def run(og_bsuite_id: str) -> str:
   config.TD_LAMBDA = 0.8
   config.REWARD_NOISE_SCALE = 0.1
   config.MASK_PROB = 0.8  # 0.6
-  config.DEEP_SEA_MAP = 5  # 1  # 20
+  config.DEEP_SEA_MAP = 1  # 1  # 20
   config.HIDDEN_SIZE = 50
   config.ROLLOUT_LEN = 50  # TODO should this be longer than ep length? probs yes
 
