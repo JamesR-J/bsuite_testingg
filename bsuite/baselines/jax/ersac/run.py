@@ -39,7 +39,7 @@ flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
 flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
                   'which form of logging to use for bsuite results')
 flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 5000, 'Overrides number of training eps.')
+flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
 # TODO reset this to 25000
 flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
 
@@ -113,5 +113,5 @@ def main(_):
 
 if __name__ == '__main__':
     # with jax.checking_leaks():
-    with jax.disable_jit(disable=True):
+    with jax.disable_jit(disable=False):
         app.run(main)
