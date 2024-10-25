@@ -105,38 +105,38 @@ class ActorCritic(base.Agent):
             logits, values = network(trajectory.observations)
             policy_dist = distrax.Softmax(logits=logits[:-1])
             log_prob = policy_dist.log_prob(trajectory.actions)
-            action_probs = policy_dist.probs
+            # action_probs = policy_dist.probs
 
-            # td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
-            # q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
-            #                        jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
-            #                        jnp.expand_dims(trajectory.discounts * discount, axis=-1),
-            #                        jnp.expand_dims(values[1:], axis=-1),
-            #                        jnp.array(td_lambda_val),
-            #                        )
-            #
-            # value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
-            #
-            q_targets = values[1:]
-            policy_dist_next = distrax.Softmax(logits=logits[1:])
-            action_probs_next = policy_dist_next.probs
-            qf = jnp.sum(action_probs_next * q_targets, axis=-1)
-            next_q = (trajectory.rewards + jnp.squeeze(state_action_reward_noise, axis=-1) +
-                      trajectory.discounts * discount * qf)
-            q_curr = values[:-1]
-            q_a_curr = jnp.take_along_axis(q_curr, jnp.expand_dims(trajectory.actions, axis=-1), axis=1)
-            value_loss = jnp.mean((jnp.square(jnp.squeeze(q_a_curr, axis=-1) - next_q)))
+            td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
+            q_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
+                                   jnp.expand_dims(trajectory.rewards, axis=-1) + state_action_reward_noise,
+                                   jnp.expand_dims(trajectory.discounts * discount, axis=-1),
+                                   jnp.expand_dims(values[1:], axis=-1),
+                                   jnp.array(td_lambda_val),
+                                   )
+
+            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
+
+            # q_targets = values[1:]
+            # policy_dist_next = distrax.Softmax(logits=logits[1:])
+            # action_probs_next = policy_dist_next.probs
+            # qf = jnp.sum(action_probs_next * q_targets, axis=-1)
+            # next_q = (trajectory.rewards + jnp.squeeze(state_action_reward_noise, axis=-1) +
+            #           trajectory.discounts * discount * qf)
+            # q_curr = values[:-1]
+            # q_a_curr = jnp.take_along_axis(q_curr, jnp.expand_dims(trajectory.actions, axis=-1), axis=1)
+            # value_loss = jnp.mean((jnp.square(jnp.squeeze(q_a_curr, axis=-1) - next_q)))
 
             mask = jnp.not_equal(trajectory.step, int(dm_env.StepType.FIRST))
             mask = mask.astype(jnp.float32)
             entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(logits[:-1], axis=1),
                                                                 jnp.expand_dims(state_reward_noise, axis=1),
                                                                 jnp.expand_dims(mask, axis=-1))
-            entropy = jnp.mean(entropy_loss)
+            # entropy = jnp.mean(entropy_loss)  # TODO it works if just use the mean of the old loss
 
             # policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1]) - entropy)
             #
-            policy_loss = -jnp.mean(action_probs * entropy - q_curr)
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1] - entropy))
 
             return policy_loss + value_loss
 
@@ -271,7 +271,7 @@ class ActorCritic(base.Agent):
         SIGMA_SCALE = 3.0  # this are from other experiments
         ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
         # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
-        ensembled_reward = jnp.minimum(ensembled_reward, 1)
+        ensembled_reward = jnp.minimum(ensembled_reward, 1.0)
 
         return ensembled_reward, ensembled_reward_sep
 
@@ -367,20 +367,22 @@ def default_agent(obs_spec: specs.Array,
                   seed: int = 0) -> base.Agent:
     """Creates an actor-critic agent with default hyperparameters."""
 
+    hidden_sizes = [config.HIDDEN_SIZE, config.HIDDEN_SIZE]
+
     def network(inputs: jnp.ndarray) -> Tuple[Logits, Value]:
         flat_inputs = hk.Flatten()(inputs)
-        torso = hk.nets.MLP([64, 64])
+        torso = hk.nets.MLP(hidden_sizes)
         policy_head = hk.Linear(action_spec.num_values)
-        value_head = hk.Linear(action_spec.num_values)
-        # value_head = hk.Linear(1)
+        # value_head = hk.Linear(action_spec.num_values)
+        value_head = hk.Linear(1)
         embedding = torso(flat_inputs)
         logits = policy_head(embedding)
         value = value_head(embedding)
-        return logits, value  #  jnp.squeeze(value, axis=-1)
-        # return logits, jnp.squeeze(value, axis=-1)
+        # return logits, value  #  jnp.squeeze(value, axis=-1)
+        return logits, jnp.squeeze(value, axis=-1)
 
     prior_scale = config.PRIOR_SCALE
-    hidden_sizes = [50, 50]
+    # hidden_sizes = [50, 50]
 
     def ensemble_network(obs: jnp.ndarray, actions: jnp.ndarray) -> jnp.ndarray:
         """Simple Q-network with randomized prior function."""

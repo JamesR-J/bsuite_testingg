@@ -1,9 +1,10 @@
 [project]
-name = "bsuite_testing"
+name = "bsuite_testingg"
 version = "0.1.0"
 description = "Default template for PDM package"
 authors = [
     {name = "jamesrj_desktop", email = "james.rudd.jones@gmail.com"},
+    {name = "", email = ""},
 ]
 dependencies = [
     "setuptools>=74.0.0",
