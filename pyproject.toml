@@ -26,6 +26,8 @@ dependencies = [
     "optax>=0.2.1",
     "wandb>=0.18.3",
     "ml-collections>=0.1.1",
+    "lxm3>=0.4.2",
+    "dm-tree>=0.1.8",
 ]
 requires-python = "==3.9.*"
 readme = "README.md"

@@ -25,88 +25,89 @@ from bsuite.baselines import experiment
 from bsuite.baselines.jax import vapor_lite
 from bsuite.baselines.utils import pool
 
-from ml_collections import config_dict
 import wandb
+from ml_collections.config_dict import ConfigDict
 
 # Internal imports.
 
 # Experiment flags.
-flags.DEFINE_string(
-    'bsuite_id', 'deep_sea/3', 'BSuite identifier. '
-                               # 'bsuite_id', 'deep_sea/10', 'BSuite identifier. '
-    'This global flag can be used to control which environment is loaded.')
-flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
-flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
-                  'which form of logging to use for bsuite results')
-flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 40000, 'Overrides number of training eps.')
-flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
+# flags.DEFINE_string(
+#     'bsuite_id', 'deep_sea/3', 'BSuite identifier. '
+#                                # 'bsuite_id', 'deep_sea/10', 'BSuite identifier. '
+#     'This global flag can be used to control which environment is loaded.')
+# flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
+# flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
+#                   'which form of logging to use for bsuite results')
+# flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
+# flags.DEFINE_integer('num_episodes', 40000, 'Overrides number of training eps.')
+# flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
+#
+# FLAGS = flags.FLAGS
 
-FLAGS = flags.FLAGS
 
-
-def run(og_bsuite_id: str) -> str:
+def run(config: ConfigDict):
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
-  config = config_dict.ConfigDict()
-  config.PRIOR_SCALE = 0.1  # 5.0  # 0.5
-  config.LR = 1e-4
-  config.ENS_LR = 1e-3
-  config.TAU_LR = 1e-3
-  config.GAMMA = 0.99
-  config.TD_LAMBDA = 0.8
-  config.REWARD_NOISE_SCALE = 0.1
-  config.UNCERTAINTY_SCALE = 3.0
-  config.MASK_PROB = 0.8  # 0.6
-  config.DEEP_SEA_MAP = 20
-  config.HIDDEN_SIZE = 100
-  config.ROLLOUT_LEN = 60  # TODO should this be longer than ep length? probs yes
-
-  bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
-
-  wandb.init(project="BSuite_Testing",
-             # entity=config.WANDB_ENTITY,
-             config=config,
-             group="vlite_testing",
-             # mode="disabled",
-             mode="online",
-             )
+  # config = config_dict.ConfigDict()
+  # config.PRIOR_SCALE = 0.1  # 5.0  # 0.5
+  # config.LR = 1e-4
+  # config.ENS_LR = 1e-3
+  # config.TAU_LR = 1e-3
+  # config.GAMMA = 0.99
+  # config.TD_LAMBDA = 0.8
+  # config.REWARD_NOISE_SCALE = 0.1
+  # config.UNCERTAINTY_SCALE = 3.0
+  # config.MASK_PROB = 0.8  # 0.6
+  # config.DEEP_SEA_MAP = 20
+  # config.HIDDEN_SIZE = 100
+  # config.ROLLOUT_LEN = 60  # TODO should this be longer than ep length? probs yes
+  #
+  # bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
+  #
+  # wandb.init(project="BSuite_Testing",
+  #            # entity=config.WANDB_ENTITY,
+  #            config=config,
+  #            group="vlite_testing",
+  #            # mode="disabled",
+  #            mode="online",
+  #            )
 
   env = bsuite.load_and_record(
-      bsuite_id=bsuite_id,
-      save_path=FLAGS.save_path,
-      logging_mode=FLAGS.logging_mode,
-      overwrite=FLAGS.overwrite,
+      bsuite_id=config.BSUITE_ID,
+      save_path='/tmp/bsuite',
+      logging_mode="csv",
+      overwrite=True,
   )
 
-  agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config)
+  agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
 
-  num_episodes = FLAGS.num_episodes or getattr(env, 'bsuite_num_episodes')
+  num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
   experiment.run(
       agent=agent,
       environment=env,
       num_episodes=num_episodes,
-      verbose=FLAGS.verbose)
+      verbose=False)
 
-  return bsuite_id
+  # return bsuite_id
 
 
 def main(_):
-  # Parses whether to run a single bsuite_id, or multiprocess sweep.
-  bsuite_id = FLAGS.bsuite_id
-
-  if bsuite_id in sweep.SWEEP:
-    print(f'Running single experiment: bsuite_id={bsuite_id}.')
-    run(bsuite_id)
-
-  elif hasattr(sweep, bsuite_id):
-    bsuite_sweep = getattr(sweep, bsuite_id)
-    print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
-    FLAGS.verbose = False
-    pool.map_mpi(run, bsuite_sweep)
-
-  else:
-    raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
+    pass
+  # # Parses whether to run a single bsuite_id, or multiprocess sweep.
+  # bsuite_id = FLAGS.bsuite_id
+  #
+  # if bsuite_id in sweep.SWEEP:
+  #   print(f'Running single experiment: bsuite_id={bsuite_id}.')
+  #   run(bsuite_id)
+  #
+  # elif hasattr(sweep, bsuite_id):
+  #   bsuite_sweep = getattr(sweep, bsuite_id)
+  #   print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
+  #   FLAGS.verbose = False
+  #   pool.map_mpi(run, bsuite_sweep)
+  #
+  # else:
+  #   raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
 
 
 if __name__ == '__main__':

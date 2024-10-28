@@ -41,6 +41,7 @@ from distrax._src.utils import math
 import wandb
 from functools import partial
 import flashbax
+import functools
 
 Array = chex.Array
 Logits = jnp.ndarray
@@ -82,14 +83,16 @@ class ActorCritic(base.Agent):
             mask_prob: float,
             init_tau: float,
             num_ensemble: int,
-            batch_size: int
+            batch_size: int,
+            config: dict
     ):
         # Define loss function.
-        def loss(batch: Any, tau_params, state_action_reward_noise) -> jnp.ndarray:
+        def loss(params: hk.Params, batch: Any, tau_params, state_action_reward_noise) -> jnp.ndarray:
             tau = jnp.exp(tau_params)
 
             """"Actor-critic loss."""
-            logits, values = hk.BatchApply(network)(batch.experience["obs"])
+            net_curried = hk.BatchApply(functools.partial(self._forward, params))
+            logits, values = net_curried(batch.experience["obs"])
 
             def get_log_prob(logits, actions):
                 dist = distrax.Softmax(logits)
@@ -98,27 +101,23 @@ class ActorCritic(base.Agent):
             log_prob, entropy = jax.vmap(get_log_prob)(logits[:, :-1], batch.experience["actions"][:, :-1])
 
             # TODO should be vmapping over batch and running in the trajectory legnth dim
-            # td_lambda = jax.vmap(rlax.td_lambda, in_axes=(0, 0, 0, 0, None), out_axes=0)
-            # k_estimate = td_lambda(values[:, :-1],
-            #                        jnp.squeeze(batch.experience["rewards"][:, :-1] + (
-            #                                state_action_reward_noise / (2 * tau)), axis=-1),
-            #                        jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
-            #                        values[:, 1:],
-            #                        td_lambda_val,
-            #                        )
-
-            # TODO should be vmapping over batch and running in the trajectory legnth dim
             rhos = rlax.categorical_importance_sampling_ratios(logits[:, :-1],
                                                                batch.experience["logits"][:, :-1],
                                                                batch.experience["actions"][:, :-1])
-            vtrace_td_error = jax.vmap(rlax.vtrace, in_axes=(0, 0, 0, 0, 0, None), out_axes=0)
+            vtrace_td_error = jax.vmap(rlax.td_lambda, in_axes=(0, 0, 0, 0, None), out_axes=0)
+            # k_estimate = vtrace_td_error(values[:, :-1],
+            #                              values[:, 1:],
+            #                              jnp.squeeze(batch.experience["rewards"][:, :-1] + (
+            #                                      state_action_reward_noise / (2 * tau)), axis=-1),
+            #                              jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
+            #                              rhos,
+            #                              0.9)  # lambda set as in vaporlite paper
             k_estimate = vtrace_td_error(values[:, :-1],
-                                         values[:, 1:],
                                          jnp.squeeze(batch.experience["rewards"][:, :-1] + (
                                                  state_action_reward_noise / (2 * tau)), axis=-1),
                                          jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
-                                         rhos,
-                                         0.9)  # lambda set as in vaporlite paper
+                                         values[:, 1:],
+                                         jnp.array(0.9))  # lambda set as in vaporlite paper
 
             value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)),
                                   axis=-1)
@@ -129,15 +128,14 @@ class ActorCritic(base.Agent):
             policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1]) + tau * entropy,
                                     axis=-1)
 
-            # Get the importance weights.
-            importance_weights = (1. / batch.priorities).astype(jnp.float32)
-            importance_weights **= importance_sampling_exponent
-            importance_weights /= jnp.max(importance_weights)
-
-            # Reweight.
-            loss = jnp.mean(importance_weights * batch_loss)
-            new_priorities = jnp.abs(td_error) + 1e-7
-
+            # # Get the importance weights.
+            # importance_weights = (1. / batch.priorities).astype(jnp.float32)
+            # importance_weights **= importance_sampling_exponent
+            # importance_weights /= jnp.max(importance_weights)
+            #
+            # # Reweight.
+            # loss = jnp.mean(importance_weights * batch_loss)
+            # new_priorities = jnp.abs(td_error) + 1e-7
 
             return jnp.mean(policy_loss) + jnp.mean(value_loss), entropy
 
@@ -160,7 +158,7 @@ class ActorCritic(base.Agent):
             return jnp.mean(loss)
 
         # Transform the loss into a pure function.
-        loss_fn = hk.without_apply_rng(hk.transform(loss)).apply
+        loss_fn = loss  # hk.without_apply_rng(hk.transform(loss)) .apply
 
         # Transform the (impure) network into a pure function.
         ensemble_network = hk.without_apply_rng(hk.transform(hk.BatchApply(ensemble_network)))
@@ -202,10 +200,11 @@ class ActorCritic(base.Agent):
                                   tau_opt_state=new_tau_opt_state), pv_loss, tau, tau_loss_val)
 
         # Initialize network parameters and optimiser state.
-        init, forward = hk.without_apply_rng(hk.transform(hk.BatchApply(network)))
+        # init, forward = hk.without_apply_rng(hk.transform(hk.BatchApply(network)))
+        network = hk.without_apply_rng(hk.transform(lambda ts: SimpleNet(action_spec.num_values, config.HIDDEN_SIZE)(ts)))  # TODO have added this
         dummy_observation = jnp.zeros((batch_size, 1, *obs_spec.shape), dtype=jnp.float32)
         dummy_action = jnp.zeros((batch_size, 1, 1), dtype=jnp.int32)
-        initial_params = init(next(rng), dummy_observation)
+        initial_params = network.init(next(rng), dummy_observation)
         initial_opt_state = optimizer.init(initial_params)
 
         # dummy_ens_observation = jnp.broadcast_to(dummy_observation, (batch_size, *dummy_observation.shape))
@@ -222,14 +221,16 @@ class ActorCritic(base.Agent):
 
         sample_seq_length = obs_spec.shape[0]  # TODO needs to be size of env
         self._batch_size = batch_size
-        self._fbx_buffer = flashbax.make_prioritised_trajectory_buffer(add_batch_size=1,
+        # self._fbx_buffer = flashbax.make_prioritised_trajectory_buffer(add_batch_size=1,
+        self._fbx_buffer = flashbax.make_trajectory_buffer(add_batch_size=1,
                                                                        sample_batch_size=self._batch_size,
                                                                        sample_sequence_length=sample_seq_length + 1,
                                                                        period=sample_seq_length + 1,
                                                                        # So no overlap in trajs?
                                                                        min_length_time_axis=1,
-                                                                       max_size=10000,
-                                                                       priority_exponent=1.0  # as in ersac
+                                                                        # max_length_time_axis=sample_seq_length+1
+                                                                       max_size=(sample_seq_length + 1) * 10,  # TODO is this an ok size?
+                                                                       # priority_exponent=1.0  # as in ersac
                                                                        )
 
         # Internalize state.
@@ -239,7 +240,7 @@ class ActorCritic(base.Agent):
                 initial_ensemble_params,
                 initial_ensemble_opt_state)
         ]
-        self._forward = jax.jit(forward)
+        self._forward = jax.jit(network.apply)
         self._ensemble_forward = jax.jit(ensemble_network.apply)
         self._buffer = sequence.Buffer(obs_spec, action_spec, sequence_length, num_ensemble)
         self._sgd_step = sgd_step
@@ -304,8 +305,10 @@ class ActorCritic(base.Agent):
             trajectory = self._buffer.drain()
 
             buffer_data = {"obs": trajectory.observations,
+                           # "actions": jnp.concatenate(
+                           #     (trajectory.actions, jnp.zeros((1,), dtype=self._action_spec.dtype))),
                            "actions": jnp.concatenate(
-                               (trajectory.actions, jnp.zeros((1,), dtype=self._action_spec.dtype))),
+                               (trajectory.actions, jnp.array(((23,)), dtype=self._action_spec.dtype))),
                            "logits": jnp.concatenate((trajectory.logits, jnp.zeros((1, 2)))),
                            "rewards": jnp.concatenate(
                                (jnp.expand_dims(trajectory.rewards, axis=-1), jnp.zeros((1, 1)))),
@@ -321,7 +324,12 @@ class ActorCritic(base.Agent):
                                                 fake_batch_sequence
                                                 )
             batch = self._fbx_buffer.sample(buffer_state, next(self._rng))
-            # TODO check it gets full trajectories and not random ones, can see this by the zero additions I have put at the end
+
+            # batch = batch.replace(experience=jax.tree_util.tree_map(lambda x: jnp.expand_dims(x[0], axis=0), batch.experience))
+            # TODO added the above to check if batching is the issue
+            # print(batch.experience["actions"])
+            # print(batch.experience["actions"][:, :-1])
+            # print(buffer_state.experience["actions"])
 
             state_action_reward_noise, reward_pred = self._get_reward_noise(batch.experience["obs"][:, :-1],
                                                                             batch.experience["actions"][:, :-1])
@@ -362,10 +370,32 @@ class ActorCritic(base.Agent):
         return buffer_state
 
 
-def default_agent(obs_spec: specs.Array,
-                  action_spec: specs.DiscreteArray,
-                  config,
-                  seed: int = 0) -> base.Agent:
+class SimpleNet(hk.Module):
+    """A simple network."""
+
+    def __init__(self, num_actions: int, hidden_size: int):
+        super().__init__()
+        self._num_actions = num_actions
+        self._hidden_size = hidden_size
+
+    def __call__(
+            self,
+            inputs,
+    ) -> tuple[jax.Array, jax.Array]:
+        """Process a batch of observations."""
+        flat_inputs = hk.Flatten()(inputs)
+        torso = hk.nets.MLP([self._hidden_size, self._hidden_size])  # TODO have changed this
+        hidden = torso(flat_inputs)
+        policy_logits = hk.Linear(self._num_actions)(hidden)
+        baseline = hk.Linear(1)(hidden)
+        baseline = jnp.squeeze(baseline, axis=-1)
+        return policy_logits, baseline
+
+
+def default_agent_off_policy(obs_spec: specs.Array,
+                             action_spec: specs.DiscreteArray,
+                             config,
+                             seed: int = 0) -> base.Agent:
     """Creates an actor-critic agent with default hyperparameters."""
 
     hidden_sizes = [config.HIDDEN_SIZE, config.HIDDEN_SIZE]
@@ -415,5 +445,6 @@ def default_agent(obs_spec: specs.Array,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
         init_tau=0.02,
-        batch_size=16
+        batch_size=16,
+        config=config
     )
