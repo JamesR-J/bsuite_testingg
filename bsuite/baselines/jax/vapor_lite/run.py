@@ -39,7 +39,7 @@ flags.DEFINE_string('save_path', '/tmp/bsuite', 'where to save bsuite results')
 flags.DEFINE_enum('logging_mode', 'csv', ['csv', 'sqlite', 'terminal'],
                   'which form of logging to use for bsuite results')
 flags.DEFINE_boolean('overwrite', True, 'overwrite csv logging if found')
-flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
+flags.DEFINE_integer('num_episodes', 40000, 'Overrides number of training eps.')
 flags.DEFINE_boolean('verbose', True, 'whether to log to std output')
 
 FLAGS = flags.FLAGS
@@ -49,17 +49,18 @@ def run(og_bsuite_id: str) -> str:
   """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
   config = config_dict.ConfigDict()
-  config.PRIOR_SCALE = 1.0  # 5.0  # 0.5
-  config.LR = 1e-3
-  config.ENS_LR = 1e-4
-  config.TAU_LR = 1e-3  # 1e-2
+  config.PRIOR_SCALE = 0.1  # 5.0  # 0.5
+  config.LR = 1e-4
+  config.ENS_LR = 1e-3
+  config.TAU_LR = 1e-3
   config.GAMMA = 0.99
   config.TD_LAMBDA = 0.8
   config.REWARD_NOISE_SCALE = 0.1
+  config.UNCERTAINTY_SCALE = 3.0
   config.MASK_PROB = 0.8  # 0.6
-  config.DEEP_SEA_MAP = 1  # 1  # 20
-  config.HIDDEN_SIZE = 50
-  config.ROLLOUT_LEN = 50  # TODO should this be longer than ep length? probs yes
+  config.DEEP_SEA_MAP = 20
+  config.HIDDEN_SIZE = 100
+  config.ROLLOUT_LEN = 60  # TODO should this be longer than ep length? probs yes
 
   bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
 
@@ -67,8 +68,8 @@ def run(og_bsuite_id: str) -> str:
              # entity=config.WANDB_ENTITY,
              config=config,
              group="vlite_testing",
-             mode="disabled",
-             # mode="online",
+             # mode="disabled",
+             mode="online",
              )
 
   env = bsuite.load_and_record(

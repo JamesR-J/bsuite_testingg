@@ -49,12 +49,13 @@ Value = jnp.ndarray
 PolicyValueNet = Callable[[jnp.ndarray], Tuple[Logits, Value]]
 
 
-def entropy_loss_fn(logits_t, uncertainty_t, mask):
+def entropy_loss_fn(logits_t, uncertainty_t):
     log_pi = jax.nn.log_softmax(logits_t)
-    log_pi_pi = math.mul_exp(log_pi, log_pi)
-    # entropy_per_timestep = -jnp.sum(log_pi_pi * uncertainty_t, axis=-1)  # sigma log_pi pi
-    entropy_per_timestep = -jnp.sum(log_pi * uncertainty_t, axis=-1)  # sigma log_pi
-    return -jnp.mean(entropy_per_timestep * mask)
+    pi_times_log_pi = math.mul_exp(log_pi, log_pi)
+    # entropy_per_timestep = -jnp.sum(pi_times_log_pi * uncertainty_t, axis=-1)  # sigma log_pi pi
+    # entropy_per_timestep = -jnp.sum(log_pi * uncertainty_t, axis=-1)  # sigma log_pi
+    # return -jnp.mean(entropy_per_timestep * mask)
+    return -jnp.sum(pi_times_log_pi * uncertainty_t, axis=-1)
 
 
 class EnsembleTrainingState(NamedTuple):
@@ -95,6 +96,7 @@ class ActorCritic(base.Agent):
             discount: float,
             td_lambda_val: float,
             reward_noise_scale: float,
+            uncertainty_scale: float,
             mask_prob: float,
             num_ensemble: int,
             importance_sampling_exponent: int
@@ -115,7 +117,7 @@ class ActorCritic(base.Agent):
                                    jnp.array(td_lambda_val),
                                    )
 
-            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(q_estimate)))
+            value_loss = jnp.mean(jnp.square(values[:-1] - jax.lax.stop_gradient(jnp.squeeze(q_estimate, axis=-1))))
 
             # q_targets = values[1:]
             # policy_dist_next = distrax.Softmax(logits=logits[1:])
@@ -127,16 +129,15 @@ class ActorCritic(base.Agent):
             # q_a_curr = jnp.take_along_axis(q_curr, jnp.expand_dims(trajectory.actions, axis=-1), axis=1)
             # value_loss = jnp.mean((jnp.square(jnp.squeeze(q_a_curr, axis=-1) - next_q)))
 
-            mask = jnp.not_equal(trajectory.step, int(dm_env.StepType.FIRST))
-            mask = mask.astype(jnp.float32)
-            entropy_loss = jax.vmap(entropy_loss_fn, in_axes=1)(jnp.expand_dims(logits[:-1], axis=1),
-                                                                jnp.expand_dims(state_reward_noise, axis=1),
-                                                                jnp.expand_dims(mask, axis=-1))
-            # entropy = jnp.mean(entropy_loss)  # TODO it works if just use the mean of the old loss
+            # mask = jnp.not_equal(trajectory.step, int(dm_env.StepType.FIRST))
+            # mask = mask.astype(jnp.float32)
+            entropy = jax.vmap(entropy_loss_fn, in_axes=1, out_axes=1)(jnp.expand_dims(logits[:-1], axis=1),
+                                                                jnp.expand_dims(state_reward_noise, axis=1))
 
             # policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1]) - entropy)
             #
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:-1] - entropy))
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(jnp.squeeze(q_estimate, axis=-1) - values[:-1]) + jnp.squeeze(entropy, axis=-1))
+            # TODO is this correct? I think in reality log probs shoud not times the entropy as in the original paper unless is type
 
             return policy_loss + value_loss
 
@@ -236,6 +237,7 @@ class ActorCritic(base.Agent):
         self._action_spec = action_spec
         self._obs_spec = obs_spec
         self._importance_sampling_exponent = importance_sampling_exponent
+        self._uncertainty_scale = uncertainty_scale
 
     def return_buffer(self):
         # fake_timestep = {"obs": jnp.zeros((*self._obs_spec.shape,)),
@@ -268,8 +270,7 @@ class ActorCritic(base.Agent):
         for k, state in enumerate(self._ensemble):
             ensembled_reward_sep = ensembled_reward_sep.at[k].set(self._single_reward_noise(state, obs, actions))
 
-        SIGMA_SCALE = 3.0  # this are from other experiments
-        ensembled_reward = SIGMA_SCALE * jnp.std(ensembled_reward_sep, axis=0)
+        ensembled_reward =  self._uncertainty_scale * jnp.std(ensembled_reward_sep, axis=0)
         # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
         ensembled_reward = jnp.minimum(ensembled_reward, 1.0)
 
@@ -406,6 +407,7 @@ def default_agent(obs_spec: specs.Array,
         discount=config.GAMMA,
         td_lambda_val=config.TD_LAMBDA,
         reward_noise_scale=config.REWARD_NOISE_SCALE,
+        uncertainty_scale=config.UNCERTAINTY_SCALE,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
         importance_sampling_exponent=0.995

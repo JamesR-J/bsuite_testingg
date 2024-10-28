@@ -52,11 +52,12 @@ def run(og_bsuite_id: str) -> str:
   config = config_dict.ConfigDict()
   config.PRIOR_SCALE = 1.0  # 5.0  # 0.5
   config.LR = 1e-3
-  config.ENS_LR = 1e-4
+  config.ENS_LR = 1e-3  # 1e-4
   config.TAU_LR = 1e-3  # 1e-2
   config.GAMMA = 0.99
   config.TD_LAMBDA = 0.8
-  config.REWARD_NOISE_SCALE = 0.1
+  config.REWARD_NOISE_SCALE = 0.1  # set in the ersac paper
+  config.UNCERTAINTY_SCALE = 1.0
   config.MASK_PROB = 0.8  # 0.6
   config.DEEP_SEA_MAP = 1  # 20
   config.HIDDEN_SIZE = 50
@@ -70,8 +71,8 @@ def run(og_bsuite_id: str) -> str:
              # entity=config.WANDB_ENTITY,
              config=config,
              group="ersac_testing",
-             mode="disabled",
-             # mode="online",
+             # mode="disabled",
+             mode="online",
              )
 
   env = bsuite.load_and_record(

@@ -118,7 +118,7 @@ class ActorCritic(base.Agent):
                                                  state_action_reward_noise / (2 * tau)), axis=-1),
                                          jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
                                          rhos,
-                                         0.9)
+                                         0.9)  # lambda set as in vaporlite paper
 
             value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)),
                                   axis=-1)
@@ -126,11 +126,19 @@ class ActorCritic(base.Agent):
 
             # entropy = policy_dist.entropy()
 
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1] - tau * entropy),
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1]) + tau * entropy,
                                     axis=-1)
-            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiply the entropy potentially
 
-            # TODO add re prioritisation, cba to do at this moment in time
+            # Get the importance weights.
+            importance_weights = (1. / batch.priorities).astype(jnp.float32)
+            importance_weights **= importance_sampling_exponent
+            importance_weights /= jnp.max(importance_weights)
+
+            # Reweight.
+            loss = jnp.mean(importance_weights * batch_loss)
+            new_priorities = jnp.abs(td_error) + 1e-7
+
+
             return jnp.mean(policy_loss) + jnp.mean(value_loss), entropy
 
         def tau_loss(log_tau, trajectory: sequence.Trajectory, entropy, state_action_reward_noise) -> jnp.ndarray:
@@ -221,7 +229,7 @@ class ActorCritic(base.Agent):
                                                                        # So no overlap in trajs?
                                                                        min_length_time_axis=1,
                                                                        max_size=10000,
-                                                                       priority_exponent=1.0
+                                                                       priority_exponent=1.0  # as in ersac
                                                                        )
 
         # Internalize state.
@@ -308,7 +316,6 @@ class ActorCritic(base.Agent):
                            "noise": jnp.concatenate((trajectory.noise, jnp.zeros((1, self._num_ensemble)))),
                            }
             broadcast_fn = lambda x: jnp.broadcast_to(x, (1, *x.shape))  # add batch dim think first dim
-            # TODO for testing made the above copy 16 times which is dodgy for now
             fake_batch_sequence = jax.tree_util.tree_map(broadcast_fn, buffer_data)
             buffer_state = self._fbx_buffer.add(buffer_state,
                                                 fake_batch_sequence
@@ -407,6 +414,6 @@ def default_agent(obs_spec: specs.Array,
         reward_noise_scale=config.REWARD_NOISE_SCALE,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
-        init_tau=0.001,
+        init_tau=0.02,
         batch_size=16
     )

@@ -78,6 +78,7 @@ class ActorCritic(base.Agent):
             discount: float,
             td_lambda_val: float,
             reward_noise_scale: float,
+            uncertainty_scale: float,
             mask_prob: float,
             init_tau: float,
             num_ensemble: int
@@ -90,8 +91,6 @@ class ActorCritic(base.Agent):
             logits, values = network(trajectory.observations)
             policy_dist = distrax.Softmax(logits=logits[:-1])
             log_prob = policy_dist.log_prob(trajectory.actions)
-
-
 
             td_lambda = jax.vmap(rlax.td_lambda, in_axes=(1, 1, 1, 1, None), out_axes=1)
             k_estimate = td_lambda(jnp.expand_dims(values[:-1], axis=-1),
@@ -106,8 +105,8 @@ class ActorCritic(base.Agent):
 
             entropy = policy_dist.entropy()
 
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1] - tau * entropy))
-            # TODO unsure if above correct, true to pseudo code but I think the log_prob should also multiply the entropy potentially
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:-1]) + tau * entropy)
+            # TODO this may be wrong? Entropy should be outside the brackets and not timesed by log_probs but eyo
 
             return policy_loss + value_loss, entropy
 
@@ -205,6 +204,7 @@ class ActorCritic(base.Agent):
         self._mask_prob = mask_prob
         self._obs_spec = obs_spec
         self._init_tau = init_tau
+        self._uncertainty_scale = uncertainty_scale
 
     def return_buffer(self):
         return None
@@ -227,7 +227,7 @@ class ActorCritic(base.Agent):
         for k, state in enumerate(self._ensemble):
             ensembled_reward_sep = ensembled_reward_sep.at[k].set(self._single_reward_noise(state, obs, actions))
 
-        ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
+        ensembled_reward = self._uncertainty_scale * jnp.var(ensembled_reward_sep, axis=0)
 
         return ensembled_reward, ensembled_reward_sep
 
@@ -333,7 +333,8 @@ def default_agent(obs_spec: specs.Array,
         discount=config.GAMMA,
         td_lambda_val=config.TD_LAMBDA,
         reward_noise_scale=config.REWARD_NOISE_SCALE,
+        uncertainty_scale=config.UNCERTAINTY_SCALE,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
-        init_tau=0.001
+        init_tau=0.02
     )
