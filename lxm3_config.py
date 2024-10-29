@@ -43,7 +43,7 @@ def sweep_SWEEP():
     ens_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
     tau_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
     deep_sea_size_list = [2, 4, 6, 8, 10]
-    num_eps_list = [25000]
+    num_eps_list = [250]  # 25000
     seed_list = [28, 10, 98]  # , 44, 22, 68]
 
     algo_list = ["ERSAC"]

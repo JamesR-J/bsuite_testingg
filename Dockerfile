@@ -30,7 +30,8 @@ COPY --from=base /requirements.txt /requirements.txt
 
 #RUN pip install --no-cache-dir  -r /requirements-vcs.txt
 #RUN pip install --no-cache-dir -r /requirements-hashed.txt
-RUN pip install --no-cache-dir -r /requirements.txt
+RUN pip install --no-cache-dir --no-deps -r /requirements.txt  # TODO added --no-deps as had issues
+#RUN pip install --no-cache-dir -r /requirements.txt
 
 RUN groupadd --gid 1000 app && useradd --uid 1000 --gid 1000 -m app
 

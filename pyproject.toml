@@ -15,12 +15,10 @@ dependencies = [
     "pandas>=2.0.3",
     "termcolor>=2.4.0",
     "dm-haiku==0.0.10",
-    "jax==0.4.13",
     "rlax>=0.1.5",
     "tqdm>=4.66.5",
     "distrax>=0.1.5",
     "flashbax>=0.1.2",
-    "jaxlib==0.4.13",
     "pillow>=10.4.0",
     "scipy==1.12.0",
     "optax>=0.2.1",
@@ -28,6 +26,7 @@ dependencies = [
     "ml-collections>=0.1.1",
     "lxm3>=0.4.2",
     "dm-tree>=0.1.8",
+    "jax[cuda11_pip]==0.4.13",
 ]
 requires-python = "==3.9.*"
 readme = "README.md"
