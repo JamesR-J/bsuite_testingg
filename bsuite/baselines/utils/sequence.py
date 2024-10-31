@@ -32,6 +32,7 @@ class Trajectory(NamedTuple):
   observations: np.ndarray  # [T + 1, ...]
   actions: np.ndarray  # [T]
   logits: np.ndarray  # [T]
+  values: np.ndarray  # [T]
   rewards: np.ndarray  # [T]
   discounts: np.ndarray  # [T]
   step: np.ndarray  # [T]
@@ -45,6 +46,7 @@ class Buffer:
   _observations: np.ndarray
   _actions: np.ndarray
   _logits: np.ndarray
+  _values: np.ndarray
   _rewards: np.ndarray
   _discounts: np.ndarray
   _step: np.ndarray
@@ -71,6 +73,9 @@ class Buffer:
     self._logits = np.zeros(
         shape=(max_sequence_length, action_spec.num_values),
         dtype=obs_spec.dtype)
+    self._values = np.zeros(
+      shape=(max_sequence_length, 1),
+        dtype=obs_spec.dtype)
     self._rewards = np.zeros(max_sequence_length, dtype=np.float32)
     self._discounts = np.zeros(max_sequence_length, dtype=np.float32)
     self._step = np.zeros(max_sequence_length, dtype=np.float32)
@@ -84,6 +89,7 @@ class Buffer:
       timestep: dm_env.TimeStep,
       action: base.Action,
       logits,
+      values,
       new_timestep: dm_env.TimeStep,
       mask,
       noise
@@ -102,6 +108,7 @@ class Buffer:
     self._observations[self._t + 1] = new_timestep.observation
     self._actions[self._t] = action
     self._logits[self._t] = logits
+    self._values[self._t] = values
     self._rewards[self._t] = new_timestep.reward
     self._discounts[self._t] = new_timestep.discount
     self._step[self._t] = new_timestep.step_type
@@ -122,6 +129,7 @@ class Buffer:
         self._observations[:self._t + 1],
         self._actions[:self._t],
         self._logits[:self._t],
+      self._values[:self._t],
         self._rewards[:self._t],
         self._discounts[:self._t],
         self._step[:self._t],

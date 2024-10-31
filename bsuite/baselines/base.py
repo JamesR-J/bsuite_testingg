@@ -33,6 +33,7 @@ class Agent(abc.ABC):
             timestep: dm_env.TimeStep,
             action: Action,
             logits,
+             values,
             new_timestep: dm_env.TimeStep,
             buffer_state,
   ) -> None:
