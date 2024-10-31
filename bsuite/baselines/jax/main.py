@@ -48,13 +48,15 @@ def main(_):
 
     config.BSUITE_ID = 'deep_sea/1'[0:9] + str(config.DEEP_SEA_MAP)
 
+    config.LOG_EVERY = True  # to log every episode or not
+
     config.ROLLOUT_LEN = int(10 + (2 * config.DEEP_SEA_MAP) + 5)  # +10 is an extra help should check this doesn't do anything tbh
 
     config.DEVICE = xla_bridge.get_backend().platform
     print(config.DEVICE)
 
     with jax.disable_jit(disable=config.DISABLE_JIT):
-        if config.ALGO == "VAPOR":
+        if config.ALGO == "VLITE":
             wandb.init(project="BSuite_Testing",
                        # entity=config.WANDB_ENTITY,
                        config=config,

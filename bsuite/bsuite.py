@@ -112,10 +112,11 @@ def load_from_id(bsuite_id: str) -> base.Environment:
 def load_and_record(bsuite_id: str,
                     save_path: str,
                     logging_mode: str = 'csv',
-                    overwrite: bool = False) -> dm_env.Environment:
+                    overwrite: bool = False,
+                    log_every: bool = False) -> dm_env.Environment:
   """Returns a bsuite environment wrapped with either CSV or SQLite logging."""
   if logging_mode == 'csv':
-    return load_and_record_to_csv(bsuite_id, save_path, overwrite)
+    return load_and_record_to_csv(bsuite_id, save_path, overwrite, log_every)
   elif logging_mode == 'sqlite':
     if not save_path.endswith('.db'):
       save_path += '.db'
@@ -172,7 +173,8 @@ def load_and_record_to_sqlite(bsuite_id: str,
 
 def load_and_record_to_csv(bsuite_id: str,
                            results_dir: str,
-                           overwrite: bool = False) -> dm_env.Environment:
+                           overwrite: bool = False,
+                           log_every: bool = False) -> dm_env.Environment:
   """Returns a bsuite environment that saves results to CSV.
 
   To load the results, specify the file path in the provided notebook, or to
@@ -204,6 +206,7 @@ def load_and_record_to_csv(bsuite_id: str,
       bsuite_id=bsuite_id,
       results_dir=results_dir,
       overwrite=overwrite,
+      log_every=log_every
   )
 
 

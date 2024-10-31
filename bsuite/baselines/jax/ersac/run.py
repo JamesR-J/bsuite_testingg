@@ -28,6 +28,7 @@ from bsuite.baselines.utils import pool
 import wandb
 from ml_collections.config_dict import ConfigDict
 
+
 # Internal imports.
 
 # # Experiment flags.
@@ -47,73 +48,76 @@ from ml_collections.config_dict import ConfigDict
 
 
 def run(config: ConfigDict):
-  """Runs an A2C agent on a given bsuite environment, logging to CSV."""
+    """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
-  # config = config_dict.ConfigDict()
-  # config.PRIOR_SCALE = 1.0  # 5.0  # 0.5
-  # config.LR = 1e-3
-  # config.ENS_LR = 1e-3  # 1e-4
-  # config.TAU_LR = 1e-3  # 1e-2
-  # config.GAMMA = 0.99
-  # config.TD_LAMBDA = 0.8
-  # config.REWARD_NOISE_SCALE = 0.1  # set in the ersac paper
-  # config.UNCERTAINTY_SCALE = 1.0
-  # config.MASK_PROB = 0.8  # 0.6
-  # config.DEEP_SEA_MAP = 1  # 20
-  # config.HIDDEN_SIZE = 50
-  # config.ROLLOUT_LEN = 50  # TODO should this be longer than ep length? probs yes
-  #
-  # bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
-  #
-  # # ep_len =
-  #
-  # wandb.init(project="BSuite_Testing",
-  #            # entity=config.WANDB_ENTITY,
-  #            config=config,
-  #            group="ersac_testing",
-  #            # mode="disabled",
-  #            mode="online",
-  #            )
+    # config = config_dict.ConfigDict()
+    # config.PRIOR_SCALE = 1.0  # 5.0  # 0.5
+    # config.LR = 1e-3
+    # config.ENS_LR = 1e-3  # 1e-4
+    # config.TAU_LR = 1e-3  # 1e-2
+    # config.GAMMA = 0.99
+    # config.TD_LAMBDA = 0.8
+    # config.REWARD_NOISE_SCALE = 0.1  # set in the ersac paper
+    # config.UNCERTAINTY_SCALE = 1.0
+    # config.MASK_PROB = 0.8  # 0.6
+    # config.DEEP_SEA_MAP = 1  # 20
+    # config.HIDDEN_SIZE = 50
+    # config.ROLLOUT_LEN = 50  # TODO should this be longer than ep length? probs yes
+    #
+    # bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
+    #
+    # # ep_len =
+    #
+    # wandb.init(project="BSuite_Testing",
+    #            # entity=config.WANDB_ENTITY,
+    #            config=config,
+    #            group="ersac_testing",
+    #            # mode="disabled",
+    #            mode="online",
+    #            )
 
-  env = bsuite.load_and_record(
-      bsuite_id=config.BSUITE_ID,
-      save_path='/tmp/bsuite',  # FLAGS.save_path,
-      logging_mode="csv",  # FLAGS.logging_mode,
-      overwrite=True,  # FLAGS.overwrite,
-  )
+    env = bsuite.load_and_record(
+        bsuite_id=config.BSUITE_ID,
+        save_path='/tmp/bsuite',  # FLAGS.save_path,
+        logging_mode="csv",  # FLAGS.logging_mode,
+        overwrite=True,  # FLAGS.overwrite,
+        log_every=config.LOG_EVERY
+    )
 
-  if config.OFF_POLICY:
-      agent = ersac.default_agent_off_policy(env.observation_spec(), env.action_spec(), config)  # , config.SEED)
-  else:
-    agent = ersac.default_agent(env.observation_spec(), env.action_spec(), config)  # , config.SEED)
+    if config.OFF_POLICY:
+        agent = ersac.default_agent_off_policy(env.observation_spec(), env.action_spec(), config, config.SEED)
+    else:
+        agent = ersac.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
 
-  num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
-  experiment.run(
-      agent=agent,
-      environment=env,
-      num_episodes=num_episodes,
-      verbose=False)  # usually true but have turned it off
+    num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
+    experiment.run(
+        agent=agent,
+        environment=env,
+        num_episodes=num_episodes,
+        verbose=False)  # usually true but have turned it off
 
-  # return bsuite_id
+    # return bsuite_id
 
 
 def main(_):
     pass
-  # # Parses whether to run a single bsuite_id, or multiprocess sweep.
-  # bsuite_id = config.BSUITE_ID
-  #
-  # if bsuite_id in sweep.SWEEP:
-  #   print(f'Running single experiment: bsuite_id={bsuite_id}.')
-  #   run(bsuite_id)
-  #
-  # elif hasattr(sweep, bsuite_id):
-  #   bsuite_sweep = getattr(sweep, bsuite_id)
-  #   print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
-  #   # FLAGS.verbose = False
-  #   pool.map_mpi(run, bsuite_sweep)
-  #
-  # else:
-  #   raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
+
+
+# # Parses whether to run a single bsuite_id, or multiprocess sweep.
+# bsuite_id = config.BSUITE_ID
+#
+# if bsuite_id in sweep.SWEEP:
+#   print(f'Running single experiment: bsuite_id={bsuite_id}.')
+#   run(bsuite_id)
+#
+# elif hasattr(sweep, bsuite_id):
+#   bsuite_sweep = getattr(sweep, bsuite_id)
+#   print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
+#   # FLAGS.verbose = False
+#   pool.map_mpi(run, bsuite_sweep)
+#
+# else:
+#   raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
 
 
 if __name__ == '__main__':

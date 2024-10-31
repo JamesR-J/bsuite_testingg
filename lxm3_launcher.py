@@ -18,7 +18,7 @@ with open("../multi_agent_climate_pathways/wandb_api_key.txt", "r") as file:
 _LAUNCH_ON_CLUSTER = flags.DEFINE_boolean(
     "launch_on_cluster", False, "Launch on cluster"
 )
-# _USE_GPU = flags.DEFINE_boolean("use_gpu", True, "If set, use GPU")
+_USE_GPU = flags.DEFINE_boolean("use_gpu", None, "If set, use GPU")
 _SINGULARITY_CONTAINER = flags.DEFINE_string(
     "container", None, "Path to singularity container"
 )
@@ -38,7 +38,7 @@ _WANDB_ENTITY = flags.DEFINE_string("wandb_entity", "jamesr-j", "wandb entity")
 _WANDB_MODE = flags.DEFINE_string("wandb_mode", "online", "wandb mode")
 
 config_flags.DEFINE_config_file("config", None, "Path to config")
-flags.mark_flags_as_required(["config", "entrypoint"])
+flags.mark_flags_as_required(["config", "entrypoint", "use_gpu"])
 FLAGS = flags.FLAGS
 
 
@@ -65,15 +65,18 @@ def main(_):
     if exp_name is None:
         exp_name = _ENTRYPOINT.value.replace(".", "_")
     with xm_cluster.create_experiment(experiment_title=exp_name) as experiment:
-        # if _USE_GPU.value:
-        job_requirements = xm_cluster.JobRequirements(gpu=1, ram=64 * xm.GB)  # TODO normally 8 gbs but now 64
-        # else:
-        #     job_requirements = xm_cluster.JobRequirements(ram=8 * xm.GB)
-        env_vars = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false",
-                    "JAX_TRACEBACK_FILTERING": "off",
-                    "XLA_PYTHON_CLIENT_MEM_FRACTION": .95,
-                    "XLA_PYTHON_CLIENT_ALLOCATOR": "platform"  # allocates memory when it is needed
-                    }
+        env_vars = {}
+        if _USE_GPU.value:
+            job_requirements = xm_cluster.JobRequirements(gpu=1, ram=64 * xm.GB)
+        else:
+            job_requirements = xm_cluster.JobRequirements(ram=32 * xm.GB)
+            env_vars['JAX_PLATFORMS'] = 'cpu'
+
+        env_vars["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+        env_vars["JAX_TRACEBACK_FILTERING"] = "off"
+        env_vars["XLA_PYTHON_CLIENT_MEM_FRACTION"] = .95
+        env_vars["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"  # allocates memory when it is needed
+
         if _LAUNCH_ON_CLUSTER.value:
             # This is a special case for using SGE in UCL where we use generic
             # job requirements and translate to SGE specific requirements.
@@ -84,7 +87,7 @@ def main(_):
                 walltime=12 * xm.Hr,  # 48 is max
                 # extra_directives=["-l gpu_type=rtx4090"],
                 # extra_directives=["-l gpu_type=rtx4090 -pe gpu 3"],  # TODO allows specifying multiple GPUS
-                extra_directives=["-l gpu_type=gtx1080ti"],  # TODO for beaker  https://hpc.cs.ucl.ac.uk/gpus/
+                # extra_directives=["-l gpu_type=gtx1080ti"],  # TODO for beaker  https://hpc.cs.ucl.ac.uk/gpus/
                 # extra_directives=["-ac allow=EF"],  # TODO for myriad  https://www.rc.ucl.ac.uk/docs/Clusters/Myriad/
                 # singularity_options=xm_cluster.SingularityOptions(bind={orbax_dir: orbax_dir}),
             )
@@ -95,7 +98,7 @@ def main(_):
             executor = xm_cluster.Local(job_requirements,
                                         singularity_options=xm_cluster.SingularityOptions(bind={orbax_dir: orbax_dir}))
             env_vars["ORBAX_DIR"] = orbax_dir
-            env_vars['JAX_PLATFORMS'] = 'cpu'
+            # env_vars['JAX_PLATFORMS'] = 'cpu'
         env_vars["LAUNCH_ON_CLUSTER"] = _LAUNCH_ON_CLUSTER.value
         spec = xm_cluster.PythonPackage(
             # This is a relative path to the launcher that contains

@@ -348,7 +348,7 @@ class ActorCritic(base.Agent):
                 self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
                 ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
-            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
+            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred):
                 metric_dict = {"policy_and_value_loss": pv_loss,
                                "tau": tau,
                                "tau_loss": tau_loss_val,
@@ -356,15 +356,12 @@ class ActorCritic(base.Agent):
                                }
                 for ensemble_id, _ in enumerate(self._ensemble):
                     metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_pv"] = reward_pred[ensemble_id, 6]
-                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_tau"] = reward_pred_2[ensemble_id, 6]
+                    metric_dict[f"Ensemble_{ensemble_id}_Loss"] = ensemble_loss_all[ensemble_id]
 
                 wandb.log(metric_dict)
 
-                for ensemble_id, _ in enumerate(self._ensemble):
-                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
-
             jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val,
-                                         ensemble_loss_all, reward_pred[:, 0, :, :], reward_pred[:, 0, :, :])
+                                         ensemble_loss_all, reward_pred[:, 0, :, :])
             # 0 just to randomly index one of the batches
             # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
 

@@ -78,6 +78,7 @@ def run(config: ConfigDict):
         save_path='/tmp/bsuite',
         logging_mode="csv",
         overwrite=True,
+        log_every=config.LOG_EVERY
     )
     if config.OFF_POLICY:
         agent = vapor_lite.default_agent_off_policy(env.observation_spec(), env.action_spec(), config, config.SEED)

@@ -35,10 +35,11 @@ def wrap_environment(env: environments.Environment,
                      bsuite_id: str,
                      results_dir: str,
                      overwrite: bool = False,
+                     log_every: bool = False,
                      log_by_step: bool = False) -> dm_env.Environment:
   """Returns a wrapped environment that logs using CSV."""
   logger = Logger(bsuite_id, results_dir, overwrite)
-  return wrappers.Logging(env, logger, log_by_step=log_by_step)
+  return wrappers.Logging(env, logger, log_by_step=log_by_step, log_every=log_every)
 
 
 class Logger(base.Logger):

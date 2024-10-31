@@ -20,7 +20,7 @@ def sweep_SWEEP():
     num_eps_list = [25000]
     seed_list = [28, 10, 98]  # , 44, 22, 68]
 
-    algo_list = ["ERSAC"]
+    algo_list = ["VLITE"]
     off_policy_list = [False]
     ppo_list = [False]
 
