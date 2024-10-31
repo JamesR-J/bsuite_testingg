@@ -270,7 +270,7 @@ class ActorCritic(base.Agent):
         for k, state in enumerate(self._ensemble):
             ensembled_reward_sep = ensembled_reward_sep.at[k].set(self._single_reward_noise(state, obs, actions))
 
-        ensembled_reward =  self._uncertainty_scale * jnp.std(ensembled_reward_sep, axis=0)
+        ensembled_reward = self._uncertainty_scale * jnp.std(ensembled_reward_sep, axis=0)
         # ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
         ensembled_reward = jnp.minimum(ensembled_reward, 1.0)
 

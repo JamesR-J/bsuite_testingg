@@ -20,3 +20,4 @@ pyvenv.cfg
 /tests/
 /reports/
 /wandb_api_key.txt
+/lxm.toml
