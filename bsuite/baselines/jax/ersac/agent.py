@@ -213,9 +213,9 @@ class ActorCritic(base.Agent):
         """Selects actions according to a softmax policy."""
         key = next(self._rng)
         observation = timestep.observation[None, ...]
-        logits, _ = self._forward(self._state.params, observation)
+        logits, values = self._forward(self._state.params, observation)
         action = jax.random.categorical(key, logits).squeeze()
-        return int(action), logits
+        return int(action), logits, values
 
     @partial(jax.jit, static_argnums=(0,))
     def _single_reward_noise(self, state, obs, action):
@@ -235,6 +235,7 @@ class ActorCritic(base.Agent):
                timestep: dm_env.TimeStep,
                action: base.Action,
                logits,
+               values,
                new_timestep: dm_env.TimeStep,
                buffer_state
                ):
@@ -242,7 +243,7 @@ class ActorCritic(base.Agent):
         mask = np.random.binomial(1, self._mask_prob, self._num_ensemble)
         noise = np.random.randn(self._num_ensemble)
 
-        self._buffer.append(timestep, action, logits, new_timestep, mask, noise)
+        self._buffer.append(timestep, action, logits, values, new_timestep, mask, noise)
 
         if self._buffer.full() or new_timestep.last():
             trajectory = self._buffer.drain()

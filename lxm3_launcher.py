@@ -28,8 +28,8 @@ _ENTRYPOINT = flags.DEFINE_string("entrypoint", None, "Entrypoint for experiment
 _SWEEP = flags.DEFINE_string("sweep", "SWEEP", "Name of the sweep")
 # _SWEEP = flags.DEFINE_string("sweep", None, "Name of the sweep")
 
-# _SWEEP_INDEX = flags.DEFINE_string("sweep_index", None, "Index of configuration in the sweep")
-_SWEEP_INDEX = flags.DEFINE_string("sweep_index", "0", "Index of configuration in the sweep")
+_SWEEP_INDEX = flags.DEFINE_string("sweep_index", None, "Index of configuration in the sweep")
+# _SWEEP_INDEX = flags.DEFINE_string("sweep_index", "0", "Index of configuration in the sweep")
 
 _WANDB_GROUP = flags.DEFINE_string("wandb_group", "{xid}_{name}", "wandb group")
 _WANDB_PROJECT = flags.DEFINE_string("wandb_project", "ProbInfMarl",
@@ -90,11 +90,12 @@ def main(_):
             )
             env_vars["ORBAX_DIR"] = orbax_dir
         else:
-            # FLAGS.wandb_mode = "disabled"
+            FLAGS.wandb_mode = "disabled"
             orbax_dir = "/mnt/cluster/project0/orbax"
             executor = xm_cluster.Local(job_requirements,
                                         singularity_options=xm_cluster.SingularityOptions(bind={orbax_dir: orbax_dir}))
             env_vars["ORBAX_DIR"] = orbax_dir
+            env_vars['JAX_PLATFORMS'] = 'cpu'
         env_vars["LAUNCH_ON_CLUSTER"] = _LAUNCH_ON_CLUSTER.value
         spec = xm_cluster.PythonPackage(
             # This is a relative path to the launcher that contains

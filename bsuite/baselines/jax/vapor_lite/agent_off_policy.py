@@ -74,23 +74,20 @@ class ActorCritic(base.Agent):
             ensemble_network: Any,
             optimizer: optax.GradientTransformation,
             ensemble_optimizer: optax.GradientTransformation,
-            tau_optimizer: optax.GradientTransformation,
             rng: hk.PRNGSequence,
             sequence_length: int,
             discount: float,
             td_lambda_val: float,
             reward_noise_scale: float,
+            uncertainty_scale: float,
             mask_prob: float,
-            init_tau: float,
             num_ensemble: int,
+            importance_sampling_exponent: int,
             batch_size: int,
             config: dict
     ):
         # Define loss function.
-        def loss(params: hk.Params, batch: Any, tau_params, state_action_reward_noise) -> jnp.ndarray:
-            tau = jnp.exp(tau_params)
-
-            """"Actor-critic loss."""
+        def loss(params: hk.Params, batch: Any, state_action_reward_noise, state_reward_noise) -> Tuple[jnp.ndarray, jnp.ndarray]:
             net_curried = hk.BatchApply(functools.partial(self._forward, params))
             logits, values = net_curried(batch.experience["obs"])
 
@@ -112,21 +109,15 @@ class ActorCritic(base.Agent):
             #                              jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
             #                              rhos,
             #                              0.9)  # lambda set as in vaporlite paper
-            k_estimate = vtrace_td_error(values[:, :-1],
-                                         jnp.squeeze(batch.experience["rewards"][:, :-1] + (
-                                                 state_action_reward_noise / (2 * tau)), axis=-1),
+            q_estimate = vtrace_td_error(values[:, :-1],
+                                         jnp.squeeze(batch.experience["rewards"][:, :-1] + state_action_reward_noise, axis=-1),
                                          jnp.squeeze(batch.experience["discounts"][:, :-1] * discount, axis=-1),
                                          values[:, 1:],
                                          jnp.array(0.9))  # lambda set as in vaporlite paper
 
-            value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(k_estimate - tau * log_prob)),
-                                  axis=-1)
-            # TODO is it right to use [1:] for these values etc or [:-1]?
+            value_loss = jnp.mean(jnp.square(values[:, :-1] - jax.lax.stop_gradient(q_estimate)), axis=-1)
 
-            # entropy = policy_dist.entropy()
-
-            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(k_estimate - values[:, :-1]) + tau * entropy,
-                                    axis=-1)
+            policy_loss = -jnp.mean(log_prob * jax.lax.stop_gradient(q_estimate - values[:, :-1]) + entropy, axis=-1)
 
             # # Get the importance weights.
             # importance_weights = (1. / batch.priorities).astype(jnp.float32)
@@ -139,14 +130,6 @@ class ActorCritic(base.Agent):
 
             return jnp.mean(policy_loss) + jnp.mean(value_loss), entropy
 
-        def tau_loss(log_tau, trajectory: sequence.Trajectory, entropy, state_action_reward_noise) -> jnp.ndarray:
-            tau = jnp.exp(log_tau)
-
-            tau_loss = jnp.mean((jnp.squeeze(state_action_reward_noise) / (2 * tau)) + (tau * entropy), axis=-1)
-
-            return jnp.mean(tau_loss)
-
-        # Define loss function, including bootstrap mask `m_t` & reward noise `z_t`.
         def ensemble_loss(params: hk.Params,
                           transitions: Sequence[jnp.ndarray]) -> jnp.ndarray:
             """Q-learning loss with added reward noise + half-in bootstrap."""
@@ -181,7 +164,7 @@ class ActorCritic(base.Agent):
         @jax.jit
         def sgd_step(state: TrainingState,
                      trajectory: sequence.Trajectory,
-                     state_action_reward_noise) -> TrainingState:
+                     state_action_reward_noise) -> Tuple[TrainingState, Any]:
             """Does a step of SGD over a trajectory."""
             (pv_loss, entropy), gradients = jax.value_and_grad(loss_fn, has_aux=True)(state.params, trajectory,
                                                                                       state.tau_params,
@@ -189,15 +172,7 @@ class ActorCritic(base.Agent):
             updates, new_opt_state = optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
 
-            tau_loss_val, tau_gradients = jax.value_and_grad(tau_loss, has_aux=False)(state.tau_params, trajectory,
-                                                                                      entropy,
-                                                                                      state_action_reward_noise)
-            tau_updates, new_tau_opt_state = tau_optimizer.update(tau_gradients, state.tau_opt_state)
-            new_tau_params = optax.apply_updates(state.tau_params, tau_updates)
-            tau = jnp.exp(new_tau_params)
-
-            return (TrainingState(params=new_params, opt_state=new_opt_state, tau_params=new_tau_params,
-                                  tau_opt_state=new_tau_opt_state), pv_loss, tau, tau_loss_val)
+            return (TrainingState(params=new_params, opt_state=new_opt_state), pv_loss)
 
         # Initialize network parameters and optimiser state.
         # init, forward = hk.without_apply_rng(hk.transform(hk.BatchApply(network)))
@@ -207,17 +182,10 @@ class ActorCritic(base.Agent):
         initial_params = network.init(next(rng), dummy_observation)
         initial_opt_state = optimizer.init(initial_params)
 
-        # dummy_ens_observation = jnp.broadcast_to(dummy_observation, (batch_size, *dummy_observation.shape))
-        # dummy_ens_action = jnp.broadcast_to(dummy_action, (batch_size, *dummy_action.shape))
-
         initial_ensemble_params = [
             ensemble_network.init(next(rng), dummy_observation, dummy_action) for _ in range(num_ensemble)
         ]
         initial_ensemble_opt_state = [ensemble_optimizer.init(p) for p in initial_ensemble_params]
-
-        log_tau = jnp.asarray(jnp.log(init_tau), dtype=jnp.float32)
-        # log_tau = jnp.asarray(init_tau, dtype=jnp.float32)  # TODO unsure how to init this val
-        tau_opt_state = tau_optimizer.init(log_tau)
 
         sample_seq_length = obs_spec.shape[0]  # TODO needs to be size of env
         self._batch_size = batch_size
@@ -234,7 +202,7 @@ class ActorCritic(base.Agent):
                                                                        )
 
         # Internalize state.
-        self._state = TrainingState(initial_params, initial_opt_state, log_tau, tau_opt_state)
+        self._state = TrainingState(initial_params, initial_opt_state)
         self._ensemble = [
             EnsembleTrainingState(p, o, step=0) for p, o in zip(
                 initial_ensemble_params,
@@ -250,7 +218,8 @@ class ActorCritic(base.Agent):
         self._mask_prob = mask_prob
         self._obs_spec = obs_spec
         self._action_spec = action_spec
-        self._init_tau = init_tau
+        self._importance_sampling_exponent = importance_sampling_exponent
+        self._uncertainty_scale = uncertainty_scale
 
     def return_buffer(self):
         fake_timestep = {"obs": jnp.zeros((*self._obs_spec.shape,)),
@@ -264,7 +233,7 @@ class ActorCritic(base.Agent):
                          }
         return self._fbx_buffer.init(fake_timestep)
 
-    def select_action(self, timestep: dm_env.TimeStep) -> base.Action:
+    def select_action(self, timestep: dm_env.TimeStep) -> Tuple[base.Action, Any, Any]:
         """Selects actions according to a softmax policy."""
         key = next(self._rng)
         observation = timestep.observation[None, ...]
@@ -284,9 +253,23 @@ class ActorCritic(base.Agent):
         for k, state in enumerate(self._ensemble):
             ensembled_reward_sep = ensembled_reward_sep.at[k].set(self._single_reward_noise(state, obs, actions))
 
-        ensembled_reward = jnp.var(ensembled_reward_sep, axis=0)
+        ensembled_reward = self._uncertainty_scale * jnp.std(ensembled_reward_sep, axis=0)
+        ensembled_reward = jnp.minimum(ensembled_reward, 1.0)
 
         return ensembled_reward, ensembled_reward_sep
+
+    def _reward_noise_over_actions(self, obs: chex.Array) -> chex.Array:  # TODO sort this oot
+        # run the get_reward_noise for each action choice, can probs vmap
+        actions = jnp.expand_dims(jnp.arange(0, self._action_spec.num_values, step=1), axis=-1)
+        actions = jnp.broadcast_to(actions, (actions.shape[0], obs.shape[0]))
+
+        obs = jnp.broadcast_to(obs, (actions.shape[0], *obs.shape))
+
+        reward_over_actions, _ = jax.vmap(self._get_reward_noise, in_axes=(0, 0))(obs, actions)
+        # TODO is the above okay since it is a loop?
+        reward_over_actions = jnp.swapaxes(jnp.squeeze(reward_over_actions, axis=-1), 0, 1)
+
+        return reward_over_actions
 
     def update(self,
                timestep: dm_env.TimeStep,
@@ -326,44 +309,31 @@ class ActorCritic(base.Agent):
                                                 )
             batch = self._fbx_buffer.sample(buffer_state, next(self._rng))
 
-            # batch = batch.replace(experience=jax.tree_util.tree_map(lambda x: jnp.expand_dims(x[0], axis=0), batch.experience))
-            # TODO added the above to check if batching is the issue
-            # print(batch.experience["actions"])
-            # print(batch.experience["actions"][:, :-1])
-            # print(buffer_state.experience["actions"])
-
             state_action_reward_noise, reward_pred = self._get_reward_noise(batch.experience["obs"][:, :-1],
                                                                             batch.experience["actions"][:, :-1])
+            state_reward_noise = self._reward_noise_over_actions(batch.experience["obs"][:, :-1])
 
-            self._state, pv_loss, tau, tau_loss_val = self._sgd_step(self._state, batch, state_action_reward_noise)
+            self._state, pv_loss = self._sgd_step(self._state, batch, state_action_reward_noise, state_reward_noise)
 
             ensemble_loss_all = jnp.zeros((self._num_ensemble,))
             for k, ensemble_state in enumerate(self._ensemble):
-                # transitions = [trajectory.observations[:, -1], trajectory.actions, trajectory.rewards,
-                #                trajectory.mask[:, k], trajectory.noise[:, k]]
                 transitions = [batch.experience["obs"][:, :-1], batch.experience["actions"][:, :-1],
                                batch.experience["rewards"][:, :-1],
                                batch.experience["mask"][:, :-1, k], batch.experience["noise"][:, :-1, k]]
-                # TODO is this right observations [:-1]
                 self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
                 ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
             def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
                 metric_dict = {"policy_and_value_loss": pv_loss,
-                               "tau": tau,
-                               "tau_loss": tau_loss_val,
                                # "model_params": first_ensemble
                                }
                 for ensemble_id, _ in enumerate(self._ensemble):
                     metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_pv"] = reward_pred[ensemble_id, 6]
-                    metric_dict[f"Ensemble_{ensemble_id}_Reward_Pred_tau"] = reward_pred_2[ensemble_id, 6]
+                    metric_dict[f"Ensemble_{ensemble_id}_Loss"] = ensemble_loss_all[ensemble_id]
 
                 wandb.log(metric_dict)
 
-                for ensemble_id, _ in enumerate(self._ensemble):
-                    wandb.log({f"Ensemble_{ensemble_id}_Loss": ensemble_loss_all[ensemble_id]})
-
-            jax.experimental.io_callback(callback, None, pv_loss, tau, tau_loss_val,
+            jax.experimental.io_callback(callback, None, pv_loss,
                                          ensemble_loss_all, reward_pred[:, 0, :, :], reward_pred[:, 0, :, :])
             # 0 just to randomly index one of the batches
             # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
@@ -437,15 +407,15 @@ def default_agent_off_policy(obs_spec: specs.Array,
         ensemble_network=ensemble_network,
         optimizer=optax.adam(config.LR),
         ensemble_optimizer=optax.adam(config.ENS_LR),
-        tau_optimizer=optax.adam(config.TAU_LR),
         rng=hk.PRNGSequence(seed),
         sequence_length=config.ROLLOUT_LEN,
         discount=config.GAMMA,
         td_lambda_val=config.TD_LAMBDA,
         reward_noise_scale=config.REWARD_NOISE_SCALE,
+        uncertainty_scale=config.UNCERTAINTY_SCALE,
         mask_prob=config.MASK_PROB,
         num_ensemble=10,
-        init_tau=0.02,
+        importance_sampling_exponent=0.995,
         batch_size=16,
         config=config
     )

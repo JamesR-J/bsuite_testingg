@@ -5,32 +5,6 @@ from ml_collections import config_dict
 
 def get_config():
     config = config_dict.ConfigDict()
-    config.LR = 2.5e-4
-    config.NUM_ENVS = 128
-    config.NUM_STEPS = 256
-    config.TOTAL_TIMESTEPS = 100
-    config.UPDATE_EPOCHS = 4
-    config.NUM_MINIBATCHES = 4
-    config.GAMMA = 0.99
-    config.GAE_LAMBDA = 0.95
-    config.CLIP_EPS = 0.2
-    config.ENT_COEF = 0.5
-    config.VF_COEF = 0.5
-    config.MAX_GRAD_NORM = 0.5
-    config.ACTIVATION = "tanh"
-    config.ANNEAL_LR = True
-    config.GRU_HIDDEN_DIM = 256
-    config.SCALE_CLIP_EPS = False
-
-    config.NUM_AGENTS = 2
-    config.REWARD_TYPE = ["PB"]
-    config.AGENT_TYPE = ["PPO"]
-
-    config.HOMOGENEOUS = False
-
-    config.RUN_TRAIN = True
-    config.RUN_EVAL = False
-    config.NUM_EVAL_STEPS = 2000
 
     return config  # TODO get this to work at some point
 
@@ -43,13 +17,16 @@ def sweep_SWEEP():
     ens_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
     tau_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
     deep_sea_size_list = [2, 4, 6, 8, 10]
-    num_eps_list = [250]  # 25000
+    num_eps_list = [25000]
     seed_list = [28, 10, 98]  # , 44, 22, 68]
 
     algo_list = ["ERSAC"]
+    off_policy_list = [False]
+    ppo_list = [False]
 
-    combinations = itertools.product(uncertainty_scale_list, mask_prob_list, hidden_size_list, prior_scale_list, lr_list, ens_lr_list, tau_lr_list,
-                                     deep_sea_size_list, num_eps_list, seed_list, algo_list)
+    combinations = itertools.product(uncertainty_scale_list, mask_prob_list, hidden_size_list, prior_scale_list,
+                                     lr_list, ens_lr_list, tau_lr_list, deep_sea_size_list, num_eps_list, seed_list,
+                                     algo_list, off_policy_list, ppo_list)
     result = [{"uncertainty_scale": uncertainty_scale,
                "mask_prob": mask_prob,
                "hidden_size": hidden_size,
@@ -61,16 +38,9 @@ def sweep_SWEEP():
                "num_episodes": num_eps,
                "seed": seed,
                "algo": algo,
+               "off_policy": off_policy,
+               "ppo": ppo,
                "disable_jit": False} for uncertainty_scale, mask_prob, hidden_size, prior_scale, lr, ens_lr, tau_lr,
-              deep_sea_size, num_eps, seed, algo in combinations]
+              deep_sea_size, num_eps, seed, algo, off_policy, ppo in combinations]
 
     return result
-
-# def get_sweep():
-#     """Returns a sweep configuration for hyperparameter tuning."""
-#
-#     config = config_dict.ConfigDict()
-#     config.learning_rate = 0.001
-#     sweep_config.params["batch_size"] = config_dict.randint(16, 64)
-#     # Add other hyperparameters with sweep ranges
-#     return sweep

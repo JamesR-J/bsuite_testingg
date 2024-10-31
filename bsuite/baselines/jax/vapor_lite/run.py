@@ -28,6 +28,7 @@ from bsuite.baselines.utils import pool
 import wandb
 from ml_collections.config_dict import ConfigDict
 
+
 # Internal imports.
 
 # Experiment flags.
@@ -46,68 +47,72 @@ from ml_collections.config_dict import ConfigDict
 
 
 def run(config: ConfigDict):
-  """Runs an A2C agent on a given bsuite environment, logging to CSV."""
+    """Runs an A2C agent on a given bsuite environment, logging to CSV."""
 
-  # config = config_dict.ConfigDict()
-  # config.PRIOR_SCALE = 0.1  # 5.0  # 0.5
-  # config.LR = 1e-4
-  # config.ENS_LR = 1e-3
-  # config.TAU_LR = 1e-3
-  # config.GAMMA = 0.99
-  # config.TD_LAMBDA = 0.8
-  # config.REWARD_NOISE_SCALE = 0.1
-  # config.UNCERTAINTY_SCALE = 3.0
-  # config.MASK_PROB = 0.8  # 0.6
-  # config.DEEP_SEA_MAP = 20
-  # config.HIDDEN_SIZE = 100
-  # config.ROLLOUT_LEN = 60  # TODO should this be longer than ep length? probs yes
-  #
-  # bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
-  #
-  # wandb.init(project="BSuite_Testing",
-  #            # entity=config.WANDB_ENTITY,
-  #            config=config,
-  #            group="vlite_testing",
-  #            # mode="disabled",
-  #            mode="online",
-  #            )
+    # config = config_dict.ConfigDict()
+    # config.PRIOR_SCALE = 0.1  # 5.0  # 0.5
+    # config.LR = 1e-4
+    # config.ENS_LR = 1e-3
+    # config.TAU_LR = 1e-3
+    # config.GAMMA = 0.99
+    # config.TD_LAMBDA = 0.8
+    # config.REWARD_NOISE_SCALE = 0.1
+    # config.UNCERTAINTY_SCALE = 3.0
+    # config.MASK_PROB = 0.8  # 0.6
+    # config.DEEP_SEA_MAP = 20
+    # config.HIDDEN_SIZE = 100
+    # config.ROLLOUT_LEN = 60  # TODO should this be longer than ep length? probs yes
+    #
+    # bsuite_id = og_bsuite_id[0:9] + str(config.DEEP_SEA_MAP)
+    #
+    # wandb.init(project="BSuite_Testing",
+    #            # entity=config.WANDB_ENTITY,
+    #            config=config,
+    #            group="vlite_testing",
+    #            # mode="disabled",
+    #            mode="online",
+    #            )
 
-  env = bsuite.load_and_record(
-      bsuite_id=config.BSUITE_ID,
-      save_path='/tmp/bsuite',
-      logging_mode="csv",
-      overwrite=True,
-  )
+    env = bsuite.load_and_record(
+        bsuite_id=config.BSUITE_ID,
+        save_path='/tmp/bsuite',
+        logging_mode="csv",
+        overwrite=True,
+    )
+    if config.OFF_POLICY:
+        agent = vapor_lite.default_agent_off_policy(env.observation_spec(), env.action_spec(), config, config.SEED)
+    else:
+        agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
 
-  agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
+    num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
+    experiment.run(
+        agent=agent,
+        environment=env,
+        num_episodes=num_episodes,
+        verbose=False)
 
-  num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
-  experiment.run(
-      agent=agent,
-      environment=env,
-      num_episodes=num_episodes,
-      verbose=False)
-
-  # return bsuite_id
+    # return bsuite_id
 
 
 def main(_):
     pass
-  # # Parses whether to run a single bsuite_id, or multiprocess sweep.
-  # bsuite_id = FLAGS.bsuite_id
-  #
-  # if bsuite_id in sweep.SWEEP:
-  #   print(f'Running single experiment: bsuite_id={bsuite_id}.')
-  #   run(bsuite_id)
-  #
-  # elif hasattr(sweep, bsuite_id):
-  #   bsuite_sweep = getattr(sweep, bsuite_id)
-  #   print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
-  #   FLAGS.verbose = False
-  #   pool.map_mpi(run, bsuite_sweep)
-  #
-  # else:
-  #   raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
+
+
+# # Parses whether to run a single bsuite_id, or multiprocess sweep.
+# bsuite_id = FLAGS.bsuite_id
+#
+# if bsuite_id in sweep.SWEEP:
+#   print(f'Running single experiment: bsuite_id={bsuite_id}.')
+#   run(bsuite_id)
+#
+# elif hasattr(sweep, bsuite_id):
+#   bsuite_sweep = getattr(sweep, bsuite_id)
+#   print(f'Running sweep over bsuite_id in sweep.{bsuite_sweep}')
+#   FLAGS.verbose = False
+#   pool.map_mpi(run, bsuite_sweep)
+#
+# else:
+#   raise ValueError(f'Invalid flag: bsuite_id={bsuite_id}.')
 
 
 if __name__ == '__main__':

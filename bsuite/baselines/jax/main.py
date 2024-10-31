@@ -19,7 +19,10 @@ _DEEP_SEA_SIZE = flags.DEFINE_integer('deep_sea_size', 1, 'Deep sea size')
 _NUM_EPS = flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
 _SEED = flags.DEFINE_integer('seed', 42, "random seed")
 _ALGO = flags.DEFINE_string("algo", "ERSAC", "algorithm used")
+_OFF_POLICY = flags.DEFINE_bool("off_policy", False, "off policy or not")
+_PPO = flags.DEFINE_bool("ppo", True, "iff ppo or not")
 _DISABLE_JIT = flags.DEFINE_bool("disable_jit", False, "to disable jit or not")
+# _WANDB_MODE = flags.DEFINE_string("wandb_mode", "disabled", "wandb enabled or not")
 
 def main(_):
     config = config_dict.ConfigDict()
@@ -27,8 +30,6 @@ def main(_):
     config.GAMMA = 0.99
     config.TD_LAMBDA = 0.8
     config.REWARD_NOISE_SCALE = 0.1  # set in the ersac paper
-
-    config.OFF_POLICY = True
 
     config.UNCERTAINTY_SCALE = _UNCERTAINTY_SCALE.value
     config.MASK_PROB = _MASK_PROB.value
@@ -41,6 +42,8 @@ def main(_):
     config.NUM_EPISODES = _NUM_EPS.value
     config.SEED = _SEED.value
     config.ALGO = _ALGO.value
+    config.OFF_POLICY = _OFF_POLICY.value
+    config.PPO = _PPO.value
     config.DISABLE_JIT = _DISABLE_JIT.value
 
     config.BSUITE_ID = 'deep_sea/1'[0:9] + str(config.DEEP_SEA_MAP)
@@ -48,9 +51,7 @@ def main(_):
     config.ROLLOUT_LEN = int(10 + (2 * config.DEEP_SEA_MAP) + 5)  # +10 is an extra help should check this doesn't do anything tbh
 
     config.DEVICE = xla_bridge.get_backend().platform
-
-    # wandb_mode = "disabled"
-    wandb_mode = "online"
+    print(config.DEVICE)
 
     with jax.disable_jit(disable=config.DISABLE_JIT):
         if config.ALGO == "VAPOR":
@@ -58,9 +59,8 @@ def main(_):
                        # entity=config.WANDB_ENTITY,
                        config=config,
                        group="vlite_testing",
-                       mode=wandb_mode
+                       # mode=_WANDB_MODE.value
                        )
-
             vlite_run(config)
 
         elif config.ALGO == "ERSAC":
@@ -68,14 +68,15 @@ def main(_):
                        # entity=config.WANDB_ENTITY,
                        config=config,
                        group="ersac_testing",
-                       mode=wandb_mode
+                       # mode=_WANDB_MODE.value
                        )
-
             ersac_run(config)
 
         else:
             print("NAH")
             sys.exit(0)
+
+    print("FINITO")
 
 
 if __name__ == '__main__':

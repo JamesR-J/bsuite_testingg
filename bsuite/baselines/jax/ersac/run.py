@@ -83,9 +83,9 @@ def run(config: ConfigDict):
   )
 
   if config.OFF_POLICY:
-      agent = ersac.default_agent_off_policy(env.observation_spec(), env.action_spec(), config, config.SEED)
+      agent = ersac.default_agent_off_policy(env.observation_spec(), env.action_spec(), config)  # , config.SEED)
   else:
-    agent = ersac.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
+    agent = ersac.default_agent(env.observation_spec(), env.action_spec(), config)  # , config.SEED)
 
   num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
   experiment.run(
