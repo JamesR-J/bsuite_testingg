@@ -23,13 +23,14 @@ _SINGULARITY_CONTAINER = flags.DEFINE_string(
     "container", None, "Path to singularity container"
 )
 _EXP_NAME = flags.DEFINE_string("exp_name", "DEEPSEA_TESTS", "Name of experiment")
-_ENTRYPOINT = flags.DEFINE_string("entrypoint", None, "Entrypoint for experiment")
+# _ENTRYPOINT = flags.DEFINE_string("entrypoint", None, "Entrypoint for experiment")
+_ENTRYPOINT = flags.DEFINE_string("entrypoint", "bsuite.baselines.jax.main", "Entrypoint for experiment")
 
 _SWEEP = flags.DEFINE_string("sweep", "SWEEP", "Name of the sweep")
 # _SWEEP = flags.DEFINE_string("sweep", None, "Name of the sweep")
 
-_SWEEP_INDEX = flags.DEFINE_string("sweep_index", None, "Index of configuration in the sweep")
-# _SWEEP_INDEX = flags.DEFINE_string("sweep_index", "0", "Index of configuration in the sweep")
+# _SWEEP_INDEX = flags.DEFINE_string("sweep_index", None, "Index of configuration in the sweep")
+_SWEEP_INDEX = flags.DEFINE_string("sweep_index", "0", "Index of configuration in the sweep")
 
 _WANDB_GROUP = flags.DEFINE_string("wandb_group", "{xid}_{name}", "wandb group")
 _WANDB_PROJECT = flags.DEFINE_string("wandb_project", "ProbInfMarl",
@@ -37,8 +38,9 @@ _WANDB_PROJECT = flags.DEFINE_string("wandb_project", "ProbInfMarl",
 _WANDB_ENTITY = flags.DEFINE_string("wandb_entity", "jamesr-j", "wandb entity")
 _WANDB_MODE = flags.DEFINE_string("wandb_mode", "online", "wandb mode")
 
-config_flags.DEFINE_config_file("config", None, "Path to config")
-flags.mark_flags_as_required(["config", "entrypoint", "use_gpu"])
+config_flags.DEFINE_config_file("config", "lxm3_config.py", "Path to config")
+# flags.mark_flags_as_required(["config", "entrypoint", "use_gpu"])
+flags.mark_flags_as_required(["use_gpu"])
 FLAGS = flags.FLAGS
 
 

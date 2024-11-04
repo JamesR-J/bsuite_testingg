@@ -9,19 +9,19 @@ def get_config():
     return config  # TODO get this to work at some point
 
 def sweep_SWEEP():
-    uncertainty_scale_list = [0.01, 0.1, 1.0, 2.0, 10.0, 100.0]
-    mask_prob_list = [0.6, 0.8, 1.0]  # [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    hidden_size_list = [50]  # [50, 64, 128, 256, 512]
-    prior_scale_list = [3.0]  # [0.1, 1.0, 2.0, 3.0, 4.0]
-    lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
-    ens_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
-    tau_lr_list = [1e-3]  # [1e-2, 1e-3, 1e-4, 1e-5]
-    deep_sea_size_list = [2, 4, 6, 8, 10]
+    uncertainty_scale_list = [3.0]  # [0.01, 0.1, 1.0, 2.0, 10.0, 100.0]
+    mask_prob_list = [1.0]  # [0.6, 0.8, 1.0]  # [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    hidden_size_list = [128]  # [50, 64, 128, 256, 512]
+    prior_scale_list = [1.0]  # [0.1, 1.0, 2.0, 3.0, 4.0]
+    lr_list = [1e-4]  # [1e-2, 1e-3, 1e-4, 1e-5]
+    ens_lr_list = [1e-4]  # [1e-2, 1e-3, 1e-4, 1e-5]
+    tau_lr_list = [1e-4]  # [1e-2, 1e-3, 1e-4, 1e-5]
+    deep_sea_size_list = [4]  # [2, 4, 6, 8, 10]
     num_eps_list = [25000]
     seed_list = [28, 10, 98]  # , 44, 22, 68]
 
     algo_list = ["VLITE"]
-    off_policy_list = [False]
+    off_policy_list = [True]
     ppo_list = [False]
 
     combinations = itertools.product(uncertainty_scale_list, mask_prob_list, hidden_size_list, prior_scale_list,

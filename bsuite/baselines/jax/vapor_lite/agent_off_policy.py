@@ -58,9 +58,6 @@ class EnsembleTrainingState(NamedTuple):
 class TrainingState(NamedTuple):
     params: hk.Params
     opt_state: Any
-    # tau: float
-    tau_params: hk.Params
-    tau_opt_state: Any
 
 
 class ActorCritic(base.Agent):
@@ -167,7 +164,6 @@ class ActorCritic(base.Agent):
                      state_action_reward_noise) -> Tuple[TrainingState, Any]:
             """Does a step of SGD over a trajectory."""
             (pv_loss, entropy), gradients = jax.value_and_grad(loss_fn, has_aux=True)(state.params, trajectory,
-                                                                                      state.tau_params,
                                                                                       state_action_reward_noise)
             updates, new_opt_state = optimizer.update(gradients, state.opt_state)
             new_params = optax.apply_updates(state.params, updates)
@@ -323,7 +319,7 @@ class ActorCritic(base.Agent):
                 self._ensemble[k], ensemble_loss_ind = self._ensemble_sgd_step(ensemble_state, transitions)
                 ensemble_loss_all = ensemble_loss_all.at[k].set(ensemble_loss_ind)
 
-            def callback(pv_loss, tau, tau_loss_val, ensemble_loss_all, reward_pred, reward_pred_2):
+            def callback(pv_loss, ensemble_loss_all, reward_pred):
                 metric_dict = {"policy_and_value_loss": pv_loss,
                                # "model_params": first_ensemble
                                }
@@ -334,7 +330,7 @@ class ActorCritic(base.Agent):
                 wandb.log(metric_dict)
 
             jax.experimental.io_callback(callback, None, pv_loss,
-                                         ensemble_loss_all, reward_pred[:, 0, :, :], reward_pred[:, 0, :, :])
+                                         ensemble_loss_all, reward_pred[:, 0, :, :])
             # 0 just to randomly index one of the batches
             # TODO I have added wandb stuff in wrappers as well, not really a todo more of a note
 
