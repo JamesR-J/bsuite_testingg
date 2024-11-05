@@ -18,4 +18,5 @@
 from bsuite.baselines.jax.vapor_lite.agent import ActorCritic
 from bsuite.baselines.jax.vapor_lite.agent import default_agent
 from bsuite.baselines.jax.vapor_lite.agent_off_policy import default_agent_off_policy
+from bsuite.baselines.jax.vapor_lite.agent_ppo import ppo_agent
 from bsuite.baselines.jax.vapor_lite import utils

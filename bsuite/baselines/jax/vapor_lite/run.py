@@ -85,6 +85,9 @@ def run(config: ConfigDict):
     else:
         agent = vapor_lite.default_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
 
+    if config.PPO:
+        agent = vapor_lite.ppo_agent(env.observation_spec(), env.action_spec(), config, config.SEED)
+
     num_episodes = config.NUM_EPISODES or getattr(env, 'bsuite_num_episodes')
     experiment.run(
         agent=agent,

@@ -21,7 +21,7 @@ def sweep_SWEEP():
     seed_list = [28, 10, 98]  # , 44, 22, 68]
 
     algo_list = ["VLITE"]
-    off_policy_list = [True]
+    off_policy_list = [False]
     ppo_list = [False]
 
     combinations = itertools.product(uncertainty_scale_list, mask_prob_list, hidden_size_list, prior_scale_list,

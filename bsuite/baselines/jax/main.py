@@ -1,4 +1,6 @@
 import wandb
+import os
+os.environ['JAX_PLATFORMS'] = 'cpu'
 import jax
 from jax.lib import xla_bridge
 from ml_collections import config_dict
@@ -8,19 +10,19 @@ from .vapor_lite.run import run as vlite_run
 from .ersac.run import run as ersac_run
 
 # Experiment flags.
-_UNCERTAINTY_SCALE = flags.DEFINE_float('uncertainty_scale', 1.0, 'uncertainty_scale')
-_MASK_PROB = flags.DEFINE_float('mask_prob', 0.8, 'mask prob')
-_HIDDEN_SIZE = flags.DEFINE_integer('hidden_size', 50, 'hidden size')
+_UNCERTAINTY_SCALE = flags.DEFINE_float('uncertainty_scale', 3.0, 'uncertainty_scale')
+_MASK_PROB = flags.DEFINE_float('mask_prob', 1.0, 'mask prob')
+_HIDDEN_SIZE = flags.DEFINE_integer('hidden_size', 128, 'hidden size')
 _PRIOR_SCALE = flags.DEFINE_float('prior_scale', 1.0, 'prior scale')
-_LR = flags.DEFINE_float('lr', 1e-3, 'lr')
-_ENS_LR = flags.DEFINE_float('ens_lr', 1e-3, 'ens lr')
-_TAU_LR = flags.DEFINE_float('tau_lr', 1e-3, 'tau lr')
-_DEEP_SEA_SIZE = flags.DEFINE_integer('deep_sea_size', 1, 'Deep sea size')
+_LR = flags.DEFINE_float('lr', 1e-4, 'lr')
+_ENS_LR = flags.DEFINE_float('ens_lr', 1e-4, 'ens lr')
+_TAU_LR = flags.DEFINE_float('tau_lr', 1e-4, 'tau lr')
+_DEEP_SEA_SIZE = flags.DEFINE_integer('deep_sea_size', 6, 'Deep sea size')
 _NUM_EPS = flags.DEFINE_integer('num_episodes', 25000, 'Overrides number of training eps.')
 _SEED = flags.DEFINE_integer('seed', 42, "random seed")
-_ALGO = flags.DEFINE_string("algo", "ERSAC", "algorithm used")
+_ALGO = flags.DEFINE_string("algo", "VLITE", "algorithm used")
 _OFF_POLICY = flags.DEFINE_bool("off_policy", False, "off policy or not")
-_PPO = flags.DEFINE_bool("ppo", True, "iff ppo or not")
+_PPO = flags.DEFINE_bool("ppo", False, "iff ppo or not")
 _DISABLE_JIT = flags.DEFINE_bool("disable_jit", False, "to disable jit or not")
 # _WANDB_MODE = flags.DEFINE_string("wandb_mode", "disabled", "wandb enabled or not")
 
@@ -61,7 +63,7 @@ def main(_):
                        # entity=config.WANDB_ENTITY,
                        config=config,
                        group="vlite_testing",
-                       # mode=_WANDB_MODE.value
+                       # mode="disabled"
                        )
             vlite_run(config)
 
